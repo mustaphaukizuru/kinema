@@ -3,6 +3,50 @@
 All notable changes to Kinema are recorded here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.11.0 — 2026-08-24
+
+Text-conditioned training now needs a folder of videos and a folder of text files, and nothing else.
+
+### Added
+- **Sidecar captions.** `clip.txt` beside `clip.mp4` is picked up automatically; a frame folder
+  takes either a sibling `clip.txt` or an inner `caption.txt`. Captioned datasets yield
+  `(video, caption)` pairs, and `Trainer` passes them straight through as `cond`, so the whole
+  text-to-video path is a directory layout rather than a pipeline you assemble yourself.
+
+  ```
+  data/
+    fireworks.mp4
+    fireworks.txt     ->  "fireworks over a harbour at night"
+  ```
+
+  ```python
+  unet = Unet3D(dim = 64, dim_mults = (1, 2, 4, 8), use_bert_text_cond = True)
+  trainer = Trainer(VideoDiffusion(unet, image_size = 64, num_frames = 10), './data')
+  trainer.train()
+  ```
+
+- `Dataset(..., captions = ...)` and `Trainer(..., captions = ...)`:
+
+  | Value | Behaviour |
+  |---|---|
+  | `'auto'` (default) | Use captions when every clip has one; otherwise train unconditionally and warn |
+  | `True` | Require them — a missing sidecar raises |
+  | `False` | Ignore sidecars entirely |
+
+  A partially captioned folder trains unconditionally rather than silently conditioning on blanks.
+
+- `caption_for(clip_path)` and `Dataset.has_captions`, both public.
+
+### Changed
+- The trainer's periodic samples are drawn from captions in the dataset when the model is
+  conditioned. Previously `sample()` was called with no `cond`, which raises on a conditional
+  model — periodic sampling simply could not work for text-conditioned training. Captions cycle
+  when there are fewer clips than sample tiles, so the grid stays full.
+
+### Verified
+ruff clean, 71 tests passing on CPU and CUDA, and a conditional run trained end to end against real
+`bert-base-cased` embeddings from sidecar captions, writing a conditioned sample.
+
 ## 0.10.0 — 2026-08-24
 
 Sampling is roughly 19× faster, datasets are no longer GIF-only, and training no longer requires

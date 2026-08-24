@@ -16,6 +16,7 @@ model, after Ho et al., *Video Diffusion Models* (https://arxiv.org/abs/2204.034
 
 from kinema.data import (
     Dataset,
+    caption_for,
     frames_to_tensor,
     gif_to_tensor,
     read_clip,
@@ -35,6 +36,7 @@ __all__ = [
     'Trainer',
     'Dataset',
     'read_clip',
+    'caption_for',
     'gif_to_tensor',
     'video_to_tensor',
     'frames_to_tensor',

@@ -1,5 +1,6 @@
 """Reading and writing video — GIF, MP4 and frame folders — plus the training Dataset."""
 
+import logging
 import re
 from functools import partial
 from pathlib import Path
@@ -12,6 +13,8 @@ from torchvision import transforms as T
 
 from kinema.utils import default, identity
 
+logger = logging.getLogger(__name__)
+
 CHANNELS_TO_MODE = {
     1 : 'L',
     3 : 'RGB',
@@ -21,6 +24,7 @@ CHANNELS_TO_MODE = {
 # extensions understood by the Dataset. gif is read with pillow; the rest need PyAV.
 
 GIF_EXTS = ('gif',)
+CAPTION_EXT = 'txt'
 VIDEO_EXTS = ('mp4', 'webm', 'avi', 'mov', 'mkv', 'm4v')
 IMAGE_EXTS = ('png', 'jpg', 'jpeg', 'bmp', 'webp')
 
@@ -151,6 +155,27 @@ def read_clip(path, channels = 3, transform = None):
 
     raise ValueError(f'unsupported clip format: {path}')
 
+def caption_for(clip_path):
+    """
+    Find the sidecar caption for a clip, or return None.
+
+    A caption is a UTF-8 text file sitting next to the clip under the same name:
+    ``fireworks.mp4`` pairs with ``fireworks.txt``. For a frame folder, either a sibling
+    ``fireworks.txt`` or a ``caption.txt`` inside the folder works.
+    """
+    path = Path(clip_path)
+
+    sidecar = path.parent / f'{path.name}.{CAPTION_EXT}' if path.is_dir() else path.with_suffix(f'.{CAPTION_EXT}')
+    if sidecar.is_file():
+        return sidecar.read_text(encoding = 'utf-8').strip()
+
+    if path.is_dir():
+        inner = path / f'caption.{CAPTION_EXT}'
+        if inner.is_file():
+            return inner.read_text(encoding = 'utf-8').strip()
+
+    return None
+
 def cast_num_frames(t, *, frames):
     f = t.shape[1]
 
@@ -171,7 +196,8 @@ class Dataset(data.Dataset):
         num_frames = 16,
         horizontal_flip = False,
         force_num_frames = True,
-        exts = GIF_EXTS + VIDEO_EXTS
+        exts = GIF_EXTS + VIDEO_EXTS,
+        captions = 'auto'
     ):
         """
         A folder of clips. Each clip may be a GIF, a video container (mp4, webm, mov, ...) or a
@@ -180,6 +206,11 @@ class Dataset(data.Dataset):
         Video files are searched first. If the folder holds none, every immediate subdirectory
         containing images is treated as one clip instead, so frame-per-file datasets work
         without reprocessing.
+
+        ``captions`` controls sidecar text conditioning, where ``clip.mp4`` pairs with
+        ``clip.txt``. ``'auto'`` (the default) uses captions when every clip has one,
+        ``True`` requires them and raises if any is missing, ``False`` ignores them entirely.
+        Items are then ``(video, caption)`` pairs rather than bare tensors.
         """
         super().__init__()
         self.folder = folder
@@ -197,6 +228,8 @@ class Dataset(data.Dataset):
                 key = natural_key
             )
 
+        self.captions = self._resolve_captions(captions)
+
         self.cast_num_frames_fn = partial(cast_num_frames, frames = num_frames) if force_num_frames else identity
 
         self.transform = T.Compose([
@@ -206,10 +239,45 @@ class Dataset(data.Dataset):
             T.ToTensor()
         ])
 
+    def _resolve_captions(self, captions):
+        """Return the caption per clip, or None if this dataset is unconditional."""
+        if captions is False:
+            return None
+
+        found = [caption_for(path) for path in self.paths]
+        missing = [path for path, caption in zip(self.paths, found) if not caption]
+
+        if not missing and len(found) > 0:
+            logger.info('found %d sidecar captions', len(found))
+            return found
+
+        if captions is True:
+            raise ValueError(
+                f'captions = True but {len(missing)} of {len(self.paths)} clips have no '
+                f'.{CAPTION_EXT} sidecar, starting with {missing[0] if missing else "n/a"}'
+            )
+
+        if missing and len(missing) < len(self.paths):
+            logger.warning(
+                '%d of %d clips have no .%s sidecar, so captions are ignored; '
+                'pass captions = True to make this an error',
+                len(missing), len(self.paths), CAPTION_EXT
+            )
+
+        return None
+
+    @property
+    def has_captions(self):
+        return self.captions is not None
+
     def __len__(self):
         return len(self.paths)
 
     def __getitem__(self, index):
         path = self.paths[index]
-        tensor = read_clip(path, channels = self.channels, transform = self.transform)
-        return self.cast_num_frames_fn(tensor)
+        tensor = self.cast_num_frames_fn(read_clip(path, channels = self.channels, transform = self.transform))
+
+        if self.has_captions:
+            return tensor, self.captions[index]
+
+        return tensor

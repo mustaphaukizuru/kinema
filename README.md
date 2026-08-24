@@ -13,7 +13,7 @@
 [![CI](https://github.com/mustaphaukizuru/kinema/actions/workflows/ci.yml/badge.svg)](https://github.com/mustaphaukizuru/kinema/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.9%20%E2%80%93%203.13-3776ab)](https://www.python.org)
 [![PyTorch](https://img.shields.io/badge/pytorch-%E2%89%A5%202.0-ee4c2c)](https://pytorch.org)
-[![Tests](https://img.shields.io/badge/tests-57%20passing-2ea44f)](tests)
+[![Tests](https://img.shields.io/badge/tests-71%20passing-2ea44f)](tests)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
 
 [Install](#install) · [Quickstart](#quickstart) · [CLI](#command-line) · [Sampling](#faster-sampling-with-ddim) · [Training](#training) · [API](#api-reference) · [Benchmarks](#benchmarks) · [FAQ](#faq)
@@ -50,10 +50,11 @@ you can depend on.
 | **Text encoder** | Archived `torch.hub` path, prompts interactively | Current `transformers`, fully non-interactive |
 | **Sampling** | 1000 sequential network passes, always | DDIM: same quality in 50, **19× faster** |
 | **Data** | GIF only | GIF, MP4, WebM, MOV, or folders of frames |
+| **Captions** | Wire up your own embedding pipeline | `clip.txt` beside `clip.mp4`, picked up automatically |
 | **Running it** | Write your own training script | `kinema train -c config.yaml` |
 | **Install weight** | Transformers pulled in whether you need it or not | Optional `[text]` extra |
 | **Structure** | One 1,000-line file | Eight focused modules |
-| **Verification** | None | 57 tests, CI on Python 3.9 – 3.13 |
+| **Verification** | None | 71 tests, CI on Python 3.9 – 3.13 |
 | **Warnings** | Accumulate quietly until something breaks | Deprecations fail the build |
 
 <div align="center">
@@ -344,6 +345,43 @@ clip = read_clip('frames/')             # a folder of numbered images
 video_tensor_to_mp4(clip, 'out.mp4')    # full colour, far smaller than GIF
 ```
 
+### Captions
+
+Text-conditioned training needs one file per clip and nothing else. Put a `.txt` beside each video
+under the same name and `Dataset` picks it up:
+
+```
+data/
+  fireworks.mp4
+  fireworks.txt        →  "fireworks over a harbour at night"
+  waves.mp4
+  waves.txt            →  "slow waves breaking on a grey beach"
+```
+
+For a frame folder, either a sibling `clip.txt` or a `caption.txt` inside the folder works. Build
+the model with text conditioning and the trainer wires the rest:
+
+```python
+unet = Unet3D(dim = 64, dim_mults = (1, 2, 4, 8), use_bert_text_cond = True)
+diffusion = VideoDiffusion(unet, image_size = 64, num_frames = 10)
+
+trainer = Trainer(diffusion, './data')       # captions detected automatically
+trainer.train()
+```
+
+Captioned datasets yield `(video, caption)` pairs, and the trainer's periodic samples are generated
+from captions drawn out of the data, so successive checkpoints stay comparable. Needs the `[text]`
+extra for BERT.
+
+| `captions` | Behaviour |
+|---|---|
+| `'auto'` *(default)* | Use captions when **every** clip has one; otherwise train unconditionally and warn |
+| `True` | Require them — a missing sidecar raises |
+| `False` | Ignore sidecars entirely |
+
+A partially captioned folder is the case worth knowing about: under `'auto'` it trains
+unconditionally rather than silently conditioning on blanks, and says so in the log.
+
 ### Choosing a device
 
 ```python
@@ -444,6 +482,14 @@ Key arguments beyond the training example above: `ema_decay`, `step_start_ema`, 
 | `frames_to_tensor(folder, channels=3)` | A folder of numbered images → tensor |
 | `video_tensor_to_gif(tensor, path)` | Tensor → animated GIF |
 | `video_tensor_to_mp4(tensor, path, fps=8)` | Tensor → H.264 MP4, via PyAV |
+| `caption_for(clip_path)` | The clip's sidecar caption, or `None` |
+
+### `Dataset`
+
+`Dataset(folder, image_size, channels=3, num_frames=16, horizontal_flip=False,
+force_num_frames=True, exts=..., captions='auto')`
+
+Yields tensors, or `(video, caption)` pairs when captions are in play. `has_captions` says which.
 
 ### Package layout
 
@@ -503,6 +549,10 @@ before renting a GPU.
 Yes. `pip install "kinema[video]"` and point `Dataset` at a folder of `.mp4`, `.webm`, `.mov`,
 `.avi`, `.mkv` or `.m4v` files. Folders of numbered image frames work too, with no extra dependency.
 
+**How do I train on my own captioned videos?**
+Put `clip.txt` next to `clip.mp4` with the caption inside, build the U-Net with
+`use_bert_text_cond = True`, and point `Trainer` at the folder. See [Captions](#captions).
+
 **Sampling is slow.**
 Set `sampling_timesteps` below `timesteps` to switch to DDIM — 50 steps is roughly 19× faster than
 the full chain with no retraining and little quality cost. See
@@ -526,7 +576,7 @@ python -m venv .venv && .venv\Scripts\Activate.ps1     # Unix: source .venv/bin/
 pip install -e ".[dev,text]"
 
 ruff check .    # lint
-pytest          # 57 tests; CUDA tests run automatically when a GPU is present
+pytest          # 71 tests; CUDA tests run automatically when a GPU is present
 ```
 
 Runnable examples live in [examples/](examples):
@@ -547,7 +597,7 @@ welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 - [x] **DDIM / fewer-step sampler** — ~19× faster sampling at 50 steps *(0.10.0)*
 - [x] MP4 and frame-folder datasets, not GIF only *(0.10.0)*
 - [x] `kinema train` CLI driven by a YAML config *(0.10.0)*
-- [ ] Conditional synthesis from `{video_filename}.txt` sidecar captions
+- [x] Conditional synthesis from `{video_filename}.txt` sidecar captions *(0.11.0)*
 - [ ] Project text into 4–8 tokens used as memory keys and values in attention
 - [ ] Multi-GPU training via `accelerate`
 - [ ] `torch.compile` support

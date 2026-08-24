@@ -11,6 +11,10 @@
 data:
   # a folder of clips: GIFs, MP4s, or subdirectories of numbered image frames
   folder: ./samples
+  #
+  # Sidecar captions are picked up automatically: put fireworks.txt next to fireworks.mp4
+  # and set model.use_bert_text_cond below. trainer.captions: true makes a missing caption
+  # an error; false ignores sidecars entirely.
 
 model:
   dim: 64

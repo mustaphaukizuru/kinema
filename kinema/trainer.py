@@ -55,7 +55,8 @@ class Trainer:
         num_sample_rows = 4,
         max_grad_norm = None,
         num_workers = 0,
-        device = None
+        device = None,
+        captions = 'auto'
     ):
         super().__init__()
         self.device = torch.device(default(device, lambda: next(diffusion_model.parameters()).device))
@@ -76,7 +77,7 @@ class Trainer:
         channels = diffusion_model.channels
         num_frames = diffusion_model.num_frames
 
-        self.ds = Dataset(folder, image_size, channels = channels, num_frames = num_frames)
+        self.ds = Dataset(folder, image_size, channels = channels, num_frames = num_frames, captions = captions)
 
         logger.info('found %d clips at %s', len(self.ds), folder)
         assert len(self.ds) > 0, 'need to have at least 1 video to start training (although 1 is not great, try 100k)'
@@ -95,6 +96,13 @@ class Trainer:
         self.amp = amp
         self.scaler = GradScaler(self.device.type, enabled = amp)
         self.max_grad_norm = max_grad_norm
+
+        # captions for the periodic samples. a conditioned model cannot sample without cond,
+        # and reusing captions from the data keeps successive samples comparable.
+        self.sample_cond = None
+        if self.ds.has_captions:
+            captions = self.ds.captions
+            self.sample_cond = [captions[i % len(captions)] for i in range(num_sample_rows ** 2)]
 
         self.num_sample_rows = num_sample_rows
         self.results_folder = Path(results_folder)
@@ -147,11 +155,16 @@ class Trainer:
 
         while self.step < self.train_num_steps:
             for _ in range(self.gradient_accumulate_every):
-                data = next(self.dl).to(self.device)
+                batch = next(self.dl)
+
+                # a captioned dataset yields (video, caption) pairs; an unconditional one yields tensors
+                data, cond = batch if isinstance(batch, (list, tuple)) else (batch, None)
+                data = data.to(self.device)
 
                 with autocast(self.device.type, enabled = self.amp):
                     loss = self.model(
                         data,
+                        cond = cond,
                         prob_focus_present = prob_focus_present,
                         focus_present_mask = focus_present_mask
                     )
@@ -180,7 +193,13 @@ class Trainer:
                 batches = num_to_groups(num_samples, self.batch_size)
 
                 # progress bars would flood the training log, so they stay off here
-                all_videos_list = list(map(lambda n: self.ema_model.sample(batch_size=n, progress=False), batches))
+                all_videos_list = []
+                taken = 0
+                for n in batches:
+                    cond = self.sample_cond[taken:taken + n] if exists(self.sample_cond) else None
+                    all_videos_list.append(self.ema_model.sample(batch_size = n, cond = cond, progress = False))
+                    taken += n
+
                 all_videos_list = torch.cat(all_videos_list, dim = 0)
 
                 all_videos_list = F.pad(all_videos_list, (2, 2, 2, 2))
