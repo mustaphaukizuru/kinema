@@ -4,6 +4,13 @@
 
 ## Video Diffusion - Pytorch
 
+> **Note**
+> This is a maintained fork of [lucidrains/video-diffusion-pytorch](https://github.com/lucidrains/video-diffusion-pytorch),
+> the original implementation by [Phil Wang](https://github.com/lucidrains), MIT licensed.
+> This fork modernises the codebase — see [CHANGELOG.md](CHANGELOG.md) for what changed in `0.8.0`
+> (working BERT text conditioning, device-agnostic `Trainer`, optimizer checkpointing, tests and CI).
+
+
 Text to video, it is happening! <a href="https://video-diffusion.github.io/">Official Project Page</a>
 
 Implementation of <a href="https://arxiv.org/abs/2204.03458">Video Diffusion Models</a>, <a href="http://www.jonathanho.me/">Jonathan Ho</a>'s new paper extending DDPMs to Video Generation - in Pytorch. It uses a special space-time factored U-net, extending generation from 2d images to 3d videos
