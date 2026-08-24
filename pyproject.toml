@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "video-diffusion-pytorch"
+dynamic = ["version"]
+description = "Video Diffusion Models (Ho et al. 2022) - space-time factored 3D U-Net DDPM in PyTorch"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+authors = [{ name = "Phil Wang", email = "lucidrains@gmail.com" }]
+maintainers = [{ name = "UKIZURU Mustapha" }]
+keywords = [
+    "artificial intelligence",
+    "deep learning",
+    "denoising diffusion probabilistic models",
+    "video generation",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "einops>=0.6",
+    "einops-exts>=0.0.4",
+    "rotary-embedding-torch>=0.3",
+    "torch>=2.0",
+    "torchvision>=0.15",
+    "pillow>=9",
+    "tqdm>=4.60",
+]
+
+[project.optional-dependencies]
+text = ["transformers>=4.30", "sentencepiece", "sacremoses"]
+dev = ["pytest>=7", "ruff>=0.4"]
+
+[project.urls]
+Homepage = "https://github.com/lucidrains/video-diffusion-pytorch"
+Paper = "https://arxiv.org/abs/2204.03458"
+
+[tool.setuptools]
+packages = ["video_diffusion_pytorch"]
+
+[tool.setuptools.dynamic]
+version = { attr = "video_diffusion_pytorch.video_diffusion_pytorch.__version__" }
+
+[tool.ruff]
+line-length = 140
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]
+ignore = ["E251", "E203", "E741"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q -p no:cacheprovider"
+filterwarnings = ["error::DeprecationWarning:torch", "error::FutureWarning:torch", "error::ResourceWarning"]

@@ -23,8 +23,22 @@ Any new developments for text-to-video synthesis will be centralized at <a href=
 ## Install
 
 ```bash
-$ pip install video-diffusion-pytorch
+pip install video-diffusion-pytorch          # core model + trainer
+pip install "video-diffusion-pytorch[text]"  # + BERT text conditioning (transformers)
 ```
+
+Requires Python >= 3.9 and PyTorch >= 2.0. Works on CPU, CUDA and MPS.
+
+## Development
+
+```bash
+git clone https://github.com/lucidrains/video-diffusion-pytorch && cd video-diffusion-pytorch
+pip install -e ".[dev,text]"
+ruff check .   # lint
+pytest         # CPU tests (CUDA tests run automatically if a GPU is present)
+```
+
+See [CHANGELOG.md](CHANGELOG.md) for what changed in this version.
 
 ## Usage
 
@@ -85,7 +99,7 @@ sampled_videos = diffusion.sample(cond = text)
 sampled_videos.shape # (2, 3, 5, 32, 32)
 ```
 
-You can also directly pass in the descriptions of the video as strings, if you plan on using BERT-base for text conditioning
+You can also directly pass in the descriptions of the video as strings, if you plan on using BERT-base for text conditioning (requires the `[text]` extra; BERT-base-cased is downloaded from the Hugging Face hub on first use)
 
 ```python
 import torch

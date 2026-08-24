@@ -1,24 +1,27 @@
-import math
 import copy
-import torch
-from torch import nn, einsum
-import torch.nn.functional as F
+import logging
+import math
 from functools import partial
-
-from torch.utils import data
 from pathlib import Path
-from torch.optim import Adam
-from torchvision import transforms as T, utils
-from torch.cuda.amp import autocast, GradScaler
-from PIL import Image
 
-from tqdm import tqdm
+import torch
+import torch.nn.functional as F
 from einops import rearrange
 from einops_exts import check_shape, rearrange_many
-
+from PIL import Image
 from rotary_embedding_torch import RotaryEmbedding
+from torch import einsum, nn
+from torch.amp import GradScaler, autocast
+from torch.optim import Adam
+from torch.utils import data
+from torchvision import transforms as T
+from tqdm import tqdm
 
-from video_diffusion_pytorch.text import tokenize, bert_embed, BERT_MODEL_DIM
+from video_diffusion_pytorch.text import BERT_MODEL_DIM
+
+logger = logging.getLogger(__name__)
+
+__version__ = '0.8.0'
 
 # helpers functions
 
@@ -38,8 +41,7 @@ def default(val, d):
 
 def cycle(dl):
     while True:
-        for data in dl:
-            yield data
+        yield from dl
 
 def num_to_groups(num, divisor):
     groups = num // divisor
@@ -60,7 +62,11 @@ def prob_mask_like(shape, prob, device):
 def is_list_str(x):
     if not isinstance(x, (list, tuple)):
         return False
-    return all([type(el) == str for el in x])
+    return all(isinstance(el, str) for el in x)
+
+def embed_text(texts, device, return_cls_repr = False):
+    from video_diffusion_pytorch.text import bert_embed, tokenize
+    return bert_embed(tokenize(texts), return_cls_repr = return_cls_repr, device = device)
 
 # relative positional bias
 
@@ -106,15 +112,17 @@ class RelativePositionBias(nn.Module):
 
 # small helper modules
 
-class EMA():
+class EMA:
     def __init__(self, beta):
-        super().__init__()
         self.beta = beta
 
+    @torch.no_grad()
     def update_model_average(self, ma_model, current_model):
         for current_params, ma_params in zip(current_model.parameters(), ma_model.parameters()):
-            old_weight, up_weight = ma_params.data, current_params.data
-            ma_params.data = self.update_average(old_weight, up_weight)
+            ma_params.copy_(self.update_average(ma_params, current_params))
+
+        for current_buf, ma_buf in zip(current_model.buffers(), ma_model.buffers()):
+            ma_buf.copy_(current_buf)
 
     def update_average(self, old, new):
         if old is None:
@@ -363,8 +371,7 @@ class Unet3D(nn.Module):
         use_bert_text_cond = False,
         init_dim = None,
         init_kernel_size = 7,
-        use_sparse_linear_attn = True,
-        block_type = 'resnet'
+        use_sparse_linear_attn = True
     ):
         super().__init__()
         self.channels = channels
@@ -373,9 +380,12 @@ class Unet3D(nn.Module):
 
         rotary_emb = RotaryEmbedding(min(32, attn_dim_head))
 
-        temporal_attn = lambda dim: EinopsToAndFrom('b c f h w', 'b (h w) f c', Attention(dim, heads = attn_heads, dim_head = attn_dim_head, rotary_emb = rotary_emb))
+        def temporal_attn(dim):
+            attn = Attention(dim, heads = attn_heads, dim_head = attn_dim_head, rotary_emb = rotary_emb)
+            return EinopsToAndFrom('b c f h w', 'b (h w) f c', attn)
 
-        self.time_rel_pos_bias = RelativePositionBias(heads = attn_heads, max_distance = 32) # realistically will not be able to generate that many frames of video... yet
+        # realistically will not be able to generate that many frames of video... yet
+        self.time_rel_pos_bias = RelativePositionBias(heads = attn_heads, max_distance = 32)
 
         # initial conv
 
@@ -431,7 +441,8 @@ class Unet3D(nn.Module):
             self.downs.append(nn.ModuleList([
                 block_klass_cond(dim_in, dim_out),
                 block_klass_cond(dim_out, dim_out),
-                Residual(PreNorm(dim_out, SpatialLinearAttention(dim_out, heads = attn_heads))) if use_sparse_linear_attn else nn.Identity(),
+                Residual(PreNorm(dim_out, SpatialLinearAttention(dim_out, heads = attn_heads)))
+                if use_sparse_linear_attn else nn.Identity(),
                 Residual(PreNorm(dim_out, temporal_attn(dim_out))),
                 Downsample(dim_out) if not is_last else nn.Identity()
             ]))
@@ -483,7 +494,7 @@ class Unet3D(nn.Module):
         cond = None,
         null_cond_prob = 0.,
         focus_present_mask = None,
-        prob_focus_present = 0.  # probability at which a given batch sample will focus on the present (0. is all off, 1. is completely arrested attention across time)
+        prob_focus_present = 0.  # probability a batch sample focuses on the present (0. = off, 1. = fully arrested attention across time)
     ):
         assert not (self.has_cond and not exists(cond)), 'cond must be passed in if cond_dim specified'
         batch, device = x.shape[0], x.device
@@ -498,7 +509,7 @@ class Unet3D(nn.Module):
 
         r = x.clone()
 
-        t = self.time_mlp(time) if exists(self.time_mlp) else None
+        t = self.time_mlp(time)
 
         # classifier free guidance
 
@@ -585,7 +596,8 @@ class GaussianDiffusion(nn.Module):
 
         # register buffer helper function that casts float64 to float32
 
-        register_buffer = lambda name, val: self.register_buffer(name, val.to(torch.float32))
+        def register_buffer(name, val):
+            self.register_buffer(name, val.to(torch.float32))
 
         register_buffer('betas', betas)
         register_buffer('alphas_cumprod', alphas_cumprod)
@@ -622,12 +634,6 @@ class GaussianDiffusion(nn.Module):
         self.use_dynamic_thres = use_dynamic_thres
         self.dynamic_thres_percentile = dynamic_thres_percentile
 
-    def q_mean_variance(self, x_start, t):
-        mean = extract(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start
-        variance = extract(1. - self.alphas_cumprod, t, x_start.shape)
-        log_variance = extract(self.log_one_minus_alphas_cumprod, t, x_start.shape)
-        return mean, variance, log_variance
-
     def predict_start_from_noise(self, x_t, t, noise):
         return (
             extract(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t -
@@ -644,7 +650,8 @@ class GaussianDiffusion(nn.Module):
         return posterior_mean, posterior_variance, posterior_log_variance_clipped
 
     def p_mean_variance(self, x, t, clip_denoised: bool, cond = None, cond_scale = 1.):
-        x_recon = self.predict_start_from_noise(x, t=t, noise = self.denoise_fn.forward_with_cond_scale(x, t, cond = cond, cond_scale = cond_scale))
+        noise = self.denoise_fn.forward_with_cond_scale(x, t, cond = cond, cond_scale = cond_scale)
+        x_recon = self.predict_start_from_noise(x, t = t, noise = noise)
 
         if clip_denoised:
             s = 1.
@@ -666,8 +673,10 @@ class GaussianDiffusion(nn.Module):
 
     @torch.inference_mode()
     def p_sample(self, x, t, cond = None, cond_scale = 1., clip_denoised = True):
-        b, *_, device = *x.shape, x.device
-        model_mean, _, model_log_variance = self.p_mean_variance(x = x, t = t, clip_denoised = clip_denoised, cond = cond, cond_scale = cond_scale)
+        b = x.shape[0]
+        model_mean, _, model_log_variance = self.p_mean_variance(
+            x = x, t = t, clip_denoised = clip_denoised, cond = cond, cond_scale = cond_scale
+        )
         noise = torch.randn_like(x)
         # no noise when t == 0
         nonzero_mask = (1 - (t == 0).float()).reshape(b, *((1,) * (len(x.shape) - 1)))
@@ -690,7 +699,7 @@ class GaussianDiffusion(nn.Module):
         device = next(self.denoise_fn.parameters()).device
 
         if is_list_str(cond):
-            cond = bert_embed(tokenize(cond)).to(device)
+            cond = embed_text(cond, device, return_cls_repr = self.text_use_bert_cls)
 
         batch_size = cond.shape[0] if exists(cond) else batch_size
         image_size = self.image_size
@@ -699,20 +708,26 @@ class GaussianDiffusion(nn.Module):
         return self.p_sample_loop((batch_size, channels, num_frames, image_size, image_size), cond = cond, cond_scale = cond_scale)
 
     @torch.inference_mode()
-    def interpolate(self, x1, x2, t = None, lam = 0.5):
+    def interpolate(self, x1, x2, t = None, lam = 0.5, cond = None, cond_scale = 1.):
+        """Interpolate between two videos (values in [0, 1]) by noising both to step ``t`` and denoising the mix."""
         b, *_, device = *x1.shape, x1.device
         t = default(t, self.num_timesteps - 1)
 
         assert x1.shape == x2.shape
+
+        if is_list_str(cond):
+            cond = embed_text(cond, device, return_cls_repr = self.text_use_bert_cls)
+
+        x1, x2 = normalize_img(x1), normalize_img(x2)
 
         t_batched = torch.stack([torch.tensor(t, device=device)] * b)
         xt1, xt2 = map(lambda x: self.q_sample(x, t=t_batched), (x1, x2))
 
         img = (1 - lam) * xt1 + lam * xt2
         for i in tqdm(reversed(range(0, t)), desc='interpolation sample time step', total=t):
-            img = self.p_sample(img, torch.full((b,), i, device=device, dtype=torch.long))
+            img = self.p_sample(img, torch.full((b,), i, device=device, dtype=torch.long), cond = cond, cond_scale = cond_scale)
 
-        return img
+        return unnormalize_img(img)
 
     def q_sample(self, x_start, t, noise = None):
         noise = default(noise, lambda: torch.randn_like(x_start))
@@ -723,14 +738,13 @@ class GaussianDiffusion(nn.Module):
         )
 
     def p_losses(self, x_start, t, cond = None, noise = None, **kwargs):
-        b, c, f, h, w, device = *x_start.shape, x_start.device
+        device = x_start.device
         noise = default(noise, lambda: torch.randn_like(x_start))
 
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
 
         if is_list_str(cond):
-            cond = bert_embed(tokenize(cond), return_cls_repr = self.text_use_bert_cls)
-            cond = cond.to(device)
+            cond = embed_text(cond, device, return_cls_repr = self.text_use_bert_cls)
 
         x_recon = self.denoise_fn(x_noisy, t, cond = cond, **kwargs)
 
@@ -774,16 +788,17 @@ def seek_all_images(img, channels = 3):
 # tensor of shape (channels, frames, height, width) -> gif
 
 def video_tensor_to_gif(tensor, path, duration = 120, loop = 0, optimize = True):
-    images = map(T.ToPILImage(), tensor.unbind(dim = 1))
+    images = list(map(T.ToPILImage(), tensor.unbind(dim = 1)))
     first_img, *rest_imgs = images
     first_img.save(path, save_all = True, append_images = rest_imgs, duration = duration, loop = loop, optimize = optimize)
     return images
 
 # gif -> (channels, frame, height, width) tensor
 
-def gif_to_tensor(path, channels = 3, transform = T.ToTensor()):
-    img = Image.open(path)
-    tensors = tuple(map(transform, seek_all_images(img, channels = channels)))
+def gif_to_tensor(path, channels = 3, transform = None):
+    transform = default(transform, T.ToTensor)
+    with Image.open(path) as img:
+        tensors = tuple(map(transform, seek_all_images(img, channels = channels)))
     return torch.stack(tensors, dim = 1)
 
 def identity(t, *args, **kwargs):
@@ -815,7 +830,7 @@ class Dataset(data.Dataset):
         num_frames = 16,
         horizontal_flip = False,
         force_num_frames = True,
-        exts = ['gif']
+        exts = ('gif',)
     ):
         super().__init__()
         self.folder = folder
@@ -860,10 +875,13 @@ class Trainer(object):
         save_and_sample_every = 1000,
         results_folder = './results',
         num_sample_rows = 4,
-        max_grad_norm = None
+        max_grad_norm = None,
+        num_workers = 0,
+        device = None
     ):
         super().__init__()
-        self.model = diffusion_model
+        self.device = torch.device(default(device, lambda: next(diffusion_model.parameters()).device))
+        self.model = diffusion_model.to(self.device)
         self.ema = EMA(ema_decay)
         self.ema_model = copy.deepcopy(self.model)
         self.update_ema_every = update_ema_every
@@ -882,16 +900,22 @@ class Trainer(object):
 
         self.ds = Dataset(folder, image_size, channels = channels, num_frames = num_frames)
 
-        print(f'found {len(self.ds)} videos as gif files at {folder}')
+        logger.info('found %d videos as gif files at %s', len(self.ds), folder)
         assert len(self.ds) > 0, 'need to have at least 1 video to start training (although 1 is not great, try 100k)'
 
-        self.dl = cycle(data.DataLoader(self.ds, batch_size = train_batch_size, shuffle=True, pin_memory=True))
+        self.dl = cycle(data.DataLoader(
+            self.ds,
+            batch_size = train_batch_size,
+            shuffle = True,
+            pin_memory = self.device.type == 'cuda',
+            num_workers = num_workers
+        ))
         self.opt = Adam(diffusion_model.parameters(), lr = train_lr)
 
         self.step = 0
 
         self.amp = amp
-        self.scaler = GradScaler(enabled = amp)
+        self.scaler = GradScaler(self.device.type, enabled = amp)
         self.max_grad_norm = max_grad_norm
 
         self.num_sample_rows = num_sample_rows
@@ -914,7 +938,9 @@ class Trainer(object):
             'step': self.step,
             'model': self.model.state_dict(),
             'ema': self.ema_model.state_dict(),
-            'scaler': self.scaler.state_dict()
+            'opt': self.opt.state_dict(),
+            'scaler': self.scaler.state_dict(),
+            'version': __version__
         }
         torch.save(data, str(self.results_folder / f'model-{milestone}.pt'))
 
@@ -924,11 +950,13 @@ class Trainer(object):
             assert len(all_milestones) > 0, 'need to have at least one milestone to load from latest checkpoint (milestone == -1)'
             milestone = max(all_milestones)
 
-        data = torch.load(str(self.results_folder / f'model-{milestone}.pt'))
+        data = torch.load(str(self.results_folder / f'model-{milestone}.pt'), map_location = self.device, weights_only = True)
 
         self.step = data['step']
         self.model.load_state_dict(data['model'], **kwargs)
         self.ema_model.load_state_dict(data['ema'], **kwargs)
+        if 'opt' in data:
+            self.opt.load_state_dict(data['opt'])
         self.scaler.load_state_dict(data['scaler'])
 
     def train(
@@ -940,10 +968,10 @@ class Trainer(object):
         assert callable(log_fn)
 
         while self.step < self.train_num_steps:
-            for i in range(self.gradient_accumulate_every):
-                data = next(self.dl).cuda()
+            for _ in range(self.gradient_accumulate_every):
+                data = next(self.dl).to(self.device)
 
-                with autocast(enabled = self.amp):
+                with autocast(self.device.type, enabled = self.amp):
                     loss = self.model(
                         data,
                         prob_focus_present = prob_focus_present,
@@ -952,7 +980,7 @@ class Trainer(object):
 
                     self.scaler.scale(loss / self.gradient_accumulate_every).backward()
 
-                print(f'{self.step}: {loss.item()}')
+                logger.info('%d: %.6f', self.step, loss.item())
 
             log = {'loss': loss.item()}
 
@@ -986,4 +1014,4 @@ class Trainer(object):
             log_fn(log)
             self.step += 1
 
-        print('training completed')
+        logger.info('training completed')
