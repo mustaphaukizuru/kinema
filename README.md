@@ -13,10 +13,10 @@
 [![CI](https://github.com/mustaphaukizuru/kinema/actions/workflows/ci.yml/badge.svg)](https://github.com/mustaphaukizuru/kinema/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.9%20%E2%80%93%203.13-3776ab)](https://www.python.org)
 [![PyTorch](https://img.shields.io/badge/pytorch-%E2%89%A5%202.0-ee4c2c)](https://pytorch.org)
-[![Tests](https://img.shields.io/badge/tests-22%20passing-2ea44f)](tests)
+[![Tests](https://img.shields.io/badge/tests-57%20passing-2ea44f)](tests)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
 
-[Install](#install) · [Quickstart](#quickstart) · [Training](#training) · [API](#api-reference) · [Benchmarks](#benchmarks) · [FAQ](#faq)
+[Install](#install) · [Quickstart](#quickstart) · [CLI](#command-line) · [Sampling](#faster-sampling-with-ddim) · [Training](#training) · [API](#api-reference) · [Benchmarks](#benchmarks) · [FAQ](#faq)
 
 </div>
 
@@ -48,9 +48,12 @@ you can depend on.
 | **Devices** | CUDA assumed, `.cuda()` hard-coded | CPU, CUDA and Apple Silicon (MPS) |
 | **Resuming** | Optimizer state silently discarded | Model, EMA, optimizer and scaler all checkpointed |
 | **Text encoder** | Archived `torch.hub` path, prompts interactively | Current `transformers`, fully non-interactive |
+| **Sampling** | 1000 sequential network passes, always | DDIM: same quality in 50, **19× faster** |
+| **Data** | GIF only | GIF, MP4, WebM, MOV, or folders of frames |
+| **Running it** | Write your own training script | `kinema train -c config.yaml` |
 | **Install weight** | Transformers pulled in whether you need it or not | Optional `[text]` extra |
-| **Structure** | One 1,000-line file | Seven focused modules |
-| **Verification** | None | 22 tests, CI on Python 3.9 – 3.13 |
+| **Structure** | One 1,000-line file | Eight focused modules |
+| **Verification** | None | 57 tests, CI on Python 3.9 – 3.13 |
 | **Warnings** | Accumulate quietly until something breaks | Deprecations fail the build |
 
 <div align="center">
@@ -63,8 +66,11 @@ you can depend on.
 ## Install
 
 ```bash
-pip install kinema            # core model + trainer
-pip install "kinema[text]"    # + BERT text conditioning
+pip install kinema                     # core model + trainer
+pip install "kinema[text]"             # + BERT text conditioning
+pip install "kinema[video]"            # + MP4 / WebM / MOV decoding
+pip install "kinema[cli]"              # + the kinema command and YAML configs
+pip install "kinema[text,video,cli]"   # everything
 ```
 
 Python ≥ 3.9, PyTorch ≥ 2.0. Runs on CPU, CUDA and MPS.
@@ -109,6 +115,91 @@ loss.backward()
 # after a lot of training
 sampled = diffusion.sample(batch_size = 4)
 sampled.shape  # (4, 3, 5, 32, 32)
+```
+
+---
+
+## Command line
+
+Training a model should not require writing a script. Install the `cli` extra and a YAML config
+describes the whole run:
+
+```bash
+kinema train -c configs/moving-mnist.yaml
+kinema train -c configs/moving-mnist.yaml --set trainer.train_lr=3e-4
+kinema train -c configs/moving-mnist.yaml --resume        # continue from the newest checkpoint
+```
+
+```yaml
+# configs/moving-mnist.yaml
+data:
+  folder: ./samples            # GIFs, MP4s, or subdirectories of numbered frames
+
+model:
+  dim: 64
+  dim_mults: [1, 2, 4]
+
+diffusion:
+  image_size: 32
+  num_frames: 10
+  timesteps: 1000
+  sampling_timesteps: 50       # sample with DDIM
+
+trainer:
+  train_batch_size: 2
+  train_lr: 1.0e-4             # note the decimal point — YAML reads 1e-4 as a string
+  train_num_steps: 100000
+  results_folder: ./results
+```
+
+Every key maps straight onto a constructor argument, so anything the classes accept can be set here
+or overridden with `--set section.key=value`. Generate from a checkpoint:
+
+```bash
+kinema sample results/model-1.pt -c configs/moving-mnist.yaml --ema -n 4 -o out.mp4
+kinema sample results/model-1.pt -c configs/moving-mnist.yaml --steps 20 --text "a dog running"
+```
+
+`kinema --help` and `kinema train --help` list everything.
+
+---
+
+## Faster sampling with DDIM
+
+The reverse diffusion process is 1000 sequential passes through the network, and that dominates
+inference wall-clock. [DDIM](https://arxiv.org/abs/2010.02502) denoises over a strided subsequence
+of the same chain, so a model trained with `timesteps = 1000` can be sampled in 50 passes — **no
+retraining, same weights**:
+
+```python
+diffusion = VideoDiffusion(model, image_size = 32, num_frames = 10, sampling_timesteps = 50)
+videos = diffusion.sample(batch_size = 4)                       # DDIM, 50 steps
+
+videos = diffusion.sample(batch_size = 4, sampling_timesteps = 20)   # faster still
+videos = diffusion.sample(batch_size = 4, sampling_timesteps = 1000) # the full DDPM chain
+```
+
+Measured on a laptop RTX 3050, one 32×32 × 10-frame clip from a 10.6 M-parameter model:
+
+| Sampler | Steps | Time | Speedup |
+|---|---:|---:|---:|
+| DDPM (full chain) | 1000 | 163.3 s | 1.0× |
+| DDIM | 250 | 42.5 s | 3.8× |
+| DDIM | 100 | 14.5 s | 11.3× |
+| **DDIM** | **50** | **8.4 s** | **19.5×** |
+| DDIM | 20 | 3.8 s | 43.4× |
+| DDIM | 10 | 1.6 s | 103.2× |
+
+Reproduce with `python examples/ddim_speedup.py`.
+
+At `eta = 0` — the default — DDIM is **deterministic**: the same seed always produces the same
+video. Raise `ddim_sampling_eta` toward `1.0` to reintroduce noise, which recovers DDPM behaviour.
+
+Every sampling call takes `progress = False` to silence the progress bar, which is what you want
+inside scripts, notebooks and CI:
+
+```python
+videos = diffusion.sample(batch_size = 4, progress = False)
 ```
 
 ---
@@ -186,7 +277,7 @@ diffusion = VideoDiffusion(
 
 ## Training
 
-`Trainer` handles a folder of GIFs, EMA, gradient accumulation, mixed precision, periodic sampling
+`Trainer` handles a folder of clips, EMA, gradient accumulation, mixed precision, periodic sampling
 and checkpointing. It runs wherever your model lives.
 
 ```python
@@ -205,7 +296,7 @@ diffusion = VideoDiffusion(
 
 trainer = Trainer(
     diffusion,
-    './data',                       # folder of .gif files
+    './data',                       # GIFs, MP4s, or folders of frames
     train_batch_size = 32,
     train_lr = 1e-4,
     train_num_steps = 700000,
@@ -227,6 +318,30 @@ scaler state, so resuming continues the run rather than restarting the optimizer
 trainer.load(-1)      # newest checkpoint
 trainer.load(12)      # results/model-12.pt
 trainer.train()       # picks up at the exact step it stopped
+```
+
+### Data formats
+
+`Dataset` reads a folder of clips in any of three shapes, dispatching on what it finds:
+
+| Layout | Requires |
+|---|---|
+| `data/*.gif` | nothing — Pillow handles it |
+| `data/*.mp4`, `.webm`, `.mov`, `.avi`, `.mkv`, `.m4v` | `pip install "kinema[video]"` |
+| `data/clip_01/0001.png, 0002.png, …` | nothing |
+
+Video files are searched first; if the folder holds none, every subdirectory containing images is
+treated as one clip, so frame-per-file datasets work without preprocessing. Frames are ordered
+naturally, so `frame2.png` precedes `frame10.png`.
+
+The same readers are available directly:
+
+```python
+from kinema import read_clip, video_to_tensor, frames_to_tensor, video_tensor_to_mp4
+
+clip = read_clip('clip.mp4')            # dispatches on extension or directory
+clip = read_clip('frames/')             # a folder of numbered images
+video_tensor_to_mp4(clip, 'out.mp4')    # full colour, far smaller than GIF
 ```
 
 ### Choosing a device
@@ -297,14 +412,21 @@ blend = diffusion.interpolate(video_a, video_b, cond = text, cond_scale = 2.)
 | `denoise_fn` | — | The `Unet3D` to train |
 | `image_size` | — | Frame height and width |
 | `num_frames` | — | Frames per clip |
-| `timesteps` | `1000` | Diffusion steps |
+| `timesteps` | `1000` | Diffusion steps used in training |
+| `sampling_timesteps` | `= timesteps` | Fewer than `timesteps` switches `sample()` to DDIM |
+| `ddim_sampling_eta` | `0.` | DDIM noise; `0.` is deterministic, `1.` recovers DDPM |
 | `loss_type` | `'l1'` | `'l1'` or `'l2'` |
 | `use_dynamic_thres` | `False` | Percentile thresholding when sampling |
 | `dynamic_thres_percentile` | `0.9` | Percentile used when enabled |
 
-**Methods** — `forward(videos, cond=None, prob_focus_present=0.)` returns the training loss ·
-`sample(cond=None, cond_scale=1., batch_size=16)` generates video ·
-`interpolate(x1, x2, t=None, lam=0.5, cond=None, cond_scale=1.)` blends two clips.
+**Methods**
+
+| Method | Description |
+|---|---|
+| `forward(videos, cond=None, prob_focus_present=0.)` | Returns the training loss |
+| `sample(cond=None, cond_scale=1., batch_size=16, sampling_timesteps=None, eta=None, progress=True)` | Generates video, DDPM or DDIM |
+| `ddim_sample(shape, ...)` | The DDIM loop directly, if you want to drive it yourself |
+| `interpolate(x1, x2, t=None, lam=0.5, cond=None, cond_scale=1., progress=True)` | Blends two clips |
 
 ### `Trainer`
 
@@ -312,15 +434,27 @@ Key arguments beyond the training example above: `ema_decay`, `step_start_ema`, 
 `save_and_sample_every`, `results_folder`, `num_sample_rows`, `max_grad_norm`, `num_workers`,
 `device`. Methods: `train(prob_focus_present=0., log_fn=noop)`, `save(milestone)`, `load(milestone)`.
 
+### Reading and writing video
+
+| Function | Description |
+|---|---|
+| `read_clip(path, channels=3)` | Reads a GIF, a video container or a folder of frames |
+| `gif_to_tensor(path, channels=3)` | GIF → `(channels, frames, h, w)` |
+| `video_to_tensor(path, channels=3)` | MP4/WebM/MOV → tensor, via PyAV |
+| `frames_to_tensor(folder, channels=3)` | A folder of numbered images → tensor |
+| `video_tensor_to_gif(tensor, path)` | Tensor → animated GIF |
+| `video_tensor_to_mp4(tensor, path, fps=8)` | Tensor → H.264 MP4, via PyAV |
+
 ### Package layout
 
 | Module | Responsibility |
 |---|---|
 | `kinema.unet` | `Unet3D` — the space-time factored denoiser |
-| `kinema.diffusion` | `VideoDiffusion` — forward and reverse processes |
+| `kinema.diffusion` | `VideoDiffusion` — forward and reverse processes, DDPM and DDIM |
 | `kinema.modules` | Attention, resnet blocks, norms, positional bias |
 | `kinema.trainer` | `Trainer` and EMA |
-| `kinema.data` | `Dataset` and GIF read/write |
+| `kinema.data` | `Dataset`, GIF/MP4/frame-folder read and write |
+| `kinema.cli` | The `kinema` command and YAML config handling |
 | `kinema.text` | BERT tokenisation and embedding |
 | `kinema.utils` | Shared helpers |
 
@@ -334,10 +468,12 @@ Laptop RTX 3050 (6 GB), `dim = 64`, `dim_mults = (1, 2, 4, 8)`, 32×32 across 5 
 |---|---|
 | Training step, batch 4 | **0.93 s** |
 | Peak VRAM, batch 4 | **1.5 GB** |
-| Sampling, 4 clips × 1000 steps | **~3.5 min** |
+| Sampling, 4 clips × 1000 DDPM steps | **~3.5 min** |
+| Sampling, 4 clips × 50 DDIM steps | **~11 s** |
 
-Headroom for batch 12–16 on 6 GB. Sampling dominates wall-clock, as it does for any ancestral DDPM
-sampler — a fewer-step sampler is the top roadmap item.
+Headroom for batch 12–16 on 6 GB. Sampling used to dominate wall-clock, as it does for any ancestral
+DDPM sampler; DDIM removes that as the default constraint — see
+[the full comparison](#faster-sampling-with-ddim).
 
 ---
 
@@ -364,8 +500,21 @@ No. Everything runs on CPU and MPS — slowly, but correctly, which is enough to
 before renting a GPU.
 
 **Can I use MP4s?**
-Not yet; `Dataset` reads GIFs. Convert with `ffmpeg -i clip.mp4 clip.gif`. Native video decoding is
-on the roadmap.
+Yes. `pip install "kinema[video]"` and point `Dataset` at a folder of `.mp4`, `.webm`, `.mov`,
+`.avi`, `.mkv` or `.m4v` files. Folders of numbered image frames work too, with no extra dependency.
+
+**Sampling is slow.**
+Set `sampling_timesteps` below `timesteps` to switch to DDIM — 50 steps is roughly 19× faster than
+the full chain with no retraining and little quality cost. See
+[Faster sampling with DDIM](#faster-sampling-with-ddim).
+
+**The progress bar is cluttering my logs.**
+Pass `progress = False` to `sample()` or `interpolate()`, or `-q` on the command line. The trainer's
+periodic samples are already silent.
+
+**`--set trainer.train_lr=3e-4` crashed with a TypeError.**
+Fixed in 0.10.0 — the CLI now coerces numbers YAML declines to parse. Inside a YAML *file*, standard
+YAML rules still apply: write `1.0e-4`, not `1e-4`, or it is read as a string.
 
 ---
 
@@ -377,7 +526,14 @@ python -m venv .venv && .venv\Scripts\Activate.ps1     # Unix: source .venv/bin/
 pip install -e ".[dev,text]"
 
 ruff check .    # lint
-pytest          # 22 tests; CUDA tests run automatically when a GPU is present
+pytest          # 57 tests; CUDA tests run automatically when a GPU is present
+```
+
+Runnable examples live in [examples/](examples):
+
+```bash
+python examples/train_and_sample.py   # train on one clip and generate a video
+python examples/ddim_speedup.py       # measure DDIM against the full chain
 ```
 
 The suite promotes PyTorch deprecation warnings and `ResourceWarning` to errors, so breakage from a
@@ -388,9 +544,9 @@ welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Roadmap
 
-- [ ] **DDIM / fewer-step sampler** — the single biggest usability win
-- [ ] MP4 and frame-folder datasets, not GIF only
-- [ ] `scripts/train.py` CLI driven by a YAML config
+- [x] **DDIM / fewer-step sampler** — ~19× faster sampling at 50 steps *(0.10.0)*
+- [x] MP4 and frame-folder datasets, not GIF only *(0.10.0)*
+- [x] `kinema train` CLI driven by a YAML config *(0.10.0)*
 - [ ] Conditional synthesis from `{video_filename}.txt` sidecar captions
 - [ ] Project text into 4–8 tokens used as memory keys and values in attention
 - [ ] Multi-GPU training via `accelerate`

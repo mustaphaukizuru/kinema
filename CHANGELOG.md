@@ -3,6 +3,62 @@
 All notable changes to Kinema are recorded here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.10.0 — 2026-08-24
+
+Sampling is roughly 19× faster, datasets are no longer GIF-only, and training no longer requires
+writing a script.
+
+### Added
+- **DDIM sampling.** `VideoDiffusion` accepts `sampling_timesteps` and `ddim_sampling_eta`, and
+  `sample()` takes both per call. Setting `sampling_timesteps` below `timesteps` denoises over a
+  strided subsequence of the same chain — no retraining, the same weights.
+
+  ```python
+  diffusion = VideoDiffusion(model, image_size = 32, num_frames = 10, sampling_timesteps = 50)
+  videos = diffusion.sample(batch_size = 4)
+  ```
+
+  Measured on a laptop RTX 3050, one 32×32 × 10-frame clip from a 10.6 M-parameter model:
+
+  | Sampler | Steps | Time | Speedup |
+  |---|---:|---:|---:|
+  | DDPM (full chain) | 1000 | 163.3 s | 1.0× |
+  | DDIM | 100 | 14.5 s | 11.3× |
+  | DDIM | 50 | 8.4 s | 19.5× |
+  | DDIM | 10 | 1.6 s | 103.2× |
+
+  At the default `eta = 0` DDIM is deterministic: the same seed yields the same video.
+
+- **MP4, WebM, MOV and frame-folder datasets.** `Dataset` reads GIFs, any PyAV-decodable container,
+  or subdirectories of numbered image frames, dispatching on what it finds. New public functions:
+  `read_clip`, `video_to_tensor`, `frames_to_tensor` and `video_tensor_to_mp4`. Container formats
+  need the new `[video]` extra; frame folders need nothing.
+- **A `kinema` command.** `kinema train -c config.yaml` and `kinema sample checkpoint.pt` replace
+  hand-written training scripts. Configs are YAML, every key maps onto a constructor argument, and
+  any value can be overridden with `--set section.key=value`. Needs the new `[cli]` extra.
+  An example config lives in `configs/moving-mnist.yaml`.
+- **`examples/`** — `train_and_sample.py` runs the whole pipeline end to end; `ddim_speedup.py`
+  reproduces the benchmark table above.
+- `predict_noise_from_start()` and `clip_x_start()` on `VideoDiffusion`, the pieces DDIM needs,
+  exposed because they are useful on their own.
+
+### Changed
+- **`sample()` and `interpolate()` accept `progress = False`.** The tqdm bar was unconditional and
+  wrote to stderr, so every script, notebook and CI job that sampled got hundreds of lines of bar.
+  The trainer's periodic samples are now silent.
+- Per-step training loss moved from `logging.info` to `logging.debug`. At INFO it drowned out
+  anything a caller chose to report through `log_fn`.
+- `Dataset`'s default `exts` now covers video containers as well as GIFs.
+
+### Fixed
+- **`--set trainer.train_lr=3e-4` crashed inside the optimizer.** YAML 1.1 only reads exponent-form
+  floats that carry a decimal point, so `3e-4` arrived as a string. Command-line numbers are now
+  coerced. Inside a YAML file standard YAML rules still apply — write `1.0e-4`.
+
+### Verified
+ruff clean, 57 tests passing on CPU and CUDA, wheel and sdist build, `kinema train` and
+`kinema sample` driven end to end against a real checkpoint.
+
 ## 0.9.0 — 2026-08-24
 
 The project is renamed **Kinema** and reorganised into a proper package.

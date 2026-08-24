@@ -47,7 +47,12 @@ dependencies = [
 
 [project.optional-dependencies]
 text = ["transformers>=4.30", "sentencepiece", "sacremoses"]
-dev = ["pytest>=7", "ruff>=0.4", "build>=1.0"]
+video = ["av>=10"]
+cli = ["pyyaml>=6"]
+dev = ["pytest>=7", "ruff>=0.4", "build>=1.0", "pyyaml>=6", "av>=10; python_version >= '3.10'"]
+
+[project.scripts]
+kinema = "kinema.cli:main"
 
 [project.urls]
 Homepage = "https://mustaphaukizuru.com"

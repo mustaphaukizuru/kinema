@@ -14,7 +14,15 @@ model, after Ho et al., *Video Diffusion Models* (https://arxiv.org/abs/2204.034
     videos = diffusion.sample(batch_size = 4)
 """
 
-from kinema.data import Dataset, gif_to_tensor, video_tensor_to_gif
+from kinema.data import (
+    Dataset,
+    frames_to_tensor,
+    gif_to_tensor,
+    read_clip,
+    video_tensor_to_gif,
+    video_tensor_to_mp4,
+    video_to_tensor,
+)
 from kinema.diffusion import GaussianDiffusion, VideoDiffusion
 from kinema.trainer import Trainer
 from kinema.unet import Unet3D
@@ -26,7 +34,11 @@ __all__ = [
     'GaussianDiffusion',
     'Trainer',
     'Dataset',
+    'read_clip',
     'gif_to_tensor',
+    'video_to_tensor',
+    'frames_to_tensor',
     'video_tensor_to_gif',
+    'video_tensor_to_mp4',
     '__version__',
 ]

@@ -44,6 +44,8 @@ class VideoDiffusion(nn.Module):
         text_use_bert_cls = False,
         channels = 3,
         timesteps = 1000,
+        sampling_timesteps = None,
+        ddim_sampling_eta = 0.,
         loss_type = 'l1',
         use_dynamic_thres = False, # from the Imagen paper
         dynamic_thres_percentile = 0.9
@@ -104,11 +106,43 @@ class VideoDiffusion(nn.Module):
         self.use_dynamic_thres = use_dynamic_thres
         self.dynamic_thres_percentile = dynamic_thres_percentile
 
+        # sampling. when sampling_timesteps < timesteps, sample() takes the DDIM
+        # path: the same trained model, denoised over a strided subsequence of
+        # the chain. eta = 0 is deterministic DDIM, eta = 1 recovers DDPM.
+
+        self.sampling_timesteps = default(sampling_timesteps, self.num_timesteps)
+        assert 1 <= self.sampling_timesteps <= self.num_timesteps, (
+            f'sampling_timesteps must be in [1, {self.num_timesteps}], got {self.sampling_timesteps}'
+        )
+        self.ddim_sampling_eta = ddim_sampling_eta
+
+    def clip_x_start(self, x_recon):
+        """Clamp the predicted x_0 — statically to [-1, 1], or by the Imagen dynamic-thresholding rule."""
+        s = 1.
+        if self.use_dynamic_thres:
+            s = torch.quantile(
+                rearrange(x_recon, 'b ... -> b (...)').abs(),
+                self.dynamic_thres_percentile,
+                dim = -1
+            )
+
+            s.clamp_(min = 1.)
+            s = s.view(-1, *((1,) * (x_recon.ndim - 1)))
+
+        # clip by threshold, depending on whether static or dynamic
+        return x_recon.clamp(-s, s) / s
+
     def predict_start_from_noise(self, x_t, t, noise):
         return (
             extract(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t -
             extract(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape) * noise
         )
+
+    def predict_noise_from_start(self, x_t, t, x_start):
+        """Inverse of ``predict_start_from_noise`` — recover the noise implied by a (possibly clipped) x_0."""
+        return (
+            extract(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t - x_start
+        ) / extract(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape)
 
     def q_posterior(self, x_start, x_t, t):
         posterior_mean = (
@@ -124,19 +158,7 @@ class VideoDiffusion(nn.Module):
         x_recon = self.predict_start_from_noise(x, t = t, noise = noise)
 
         if clip_denoised:
-            s = 1.
-            if self.use_dynamic_thres:
-                s = torch.quantile(
-                    rearrange(x_recon, 'b ... -> b (...)').abs(),
-                    self.dynamic_thres_percentile,
-                    dim = -1
-                )
-
-                s.clamp_(min = 1.)
-                s = s.view(-1, *((1,) * (x_recon.ndim - 1)))
-
-            # clip by threshold, depending on whether static or dynamic
-            x_recon = x_recon.clamp(-s, s) / s
+            x_recon = self.clip_x_start(x_recon)
 
         model_mean, posterior_variance, posterior_log_variance = self.q_posterior(x_start=x_recon, x_t=x, t=t)
         return model_mean, posterior_variance, posterior_log_variance
@@ -153,19 +175,108 @@ class VideoDiffusion(nn.Module):
         return model_mean + nonzero_mask * (0.5 * model_log_variance).exp() * noise
 
     @torch.inference_mode()
-    def p_sample_loop(self, shape, cond = None, cond_scale = 1.):
+    def p_sample_loop(self, shape, cond = None, cond_scale = 1., progress = True):
         device = self.betas.device
 
         b = shape[0]
         img = torch.randn(shape, device=device)
 
-        for i in tqdm(reversed(range(0, self.num_timesteps)), desc='sampling loop time step', total=self.num_timesteps):
+        steps = tqdm(
+            reversed(range(0, self.num_timesteps)),
+            desc = 'sampling loop time step',
+            total = self.num_timesteps,
+            disable = not progress
+        )
+
+        for i in steps:
             img = self.p_sample(img, torch.full((b,), i, device=device, dtype=torch.long), cond = cond, cond_scale = cond_scale)
 
         return unnormalize_img(img)
 
     @torch.inference_mode()
-    def sample(self, cond = None, cond_scale = 1., batch_size = 16):
+    def ddim_sample(
+        self,
+        shape,
+        cond = None,
+        cond_scale = 1.,
+        sampling_timesteps = None,
+        eta = None,
+        clip_denoised = True,
+        progress = True
+    ):
+        """
+        Sample with DDIM (https://arxiv.org/abs/2010.02502).
+
+        Denoises over a strided subsequence of the training chain, so a model trained with
+        ``timesteps = 1000`` can be sampled in 50 network passes instead of 1000. No retraining
+        is involved — the same epsilon-prediction is reused on a shorter schedule.
+
+        ``eta = 0`` is deterministic: the same noise always yields the same video, which is what
+        makes latent interpolation and reproducible outputs possible. ``eta = 1`` recovers the
+        stochastic DDPM update.
+        """
+        device = self.betas.device
+        b = shape[0]
+
+        steps = default(sampling_timesteps, self.sampling_timesteps)
+        eta = default(eta, self.ddim_sampling_eta)
+        assert 1 <= steps <= self.num_timesteps, (
+            f'sampling_timesteps must be in [1, {self.num_timesteps}], got {steps}'
+        )
+
+        # a strided subsequence of [0, num_timesteps), walked in reverse, paired with its successor.
+        # the final pair steps to -1, which denotes x_0 itself.
+
+        times = torch.linspace(-1, self.num_timesteps - 1, steps = steps + 1).flip(0).long().tolist()
+        time_pairs = list(zip(times[:-1], times[1:]))
+
+        img = torch.randn(shape, device = device)
+
+        for time, time_next in tqdm(time_pairs, desc = 'ddim sampling time step', disable = not progress):
+            t = torch.full((b,), time, device = device, dtype = torch.long)
+
+            pred_noise = self.denoise_fn.forward_with_cond_scale(img, t, cond = cond, cond_scale = cond_scale)
+            x_start = self.predict_start_from_noise(img, t = t, noise = pred_noise)
+
+            if clip_denoised:
+                x_start = self.clip_x_start(x_start)
+                # clipping moved x_0, so the noise term must be recomputed to stay consistent with it
+                pred_noise = self.predict_noise_from_start(img, t = t, x_start = x_start)
+
+            if time_next < 0:
+                img = x_start
+                continue
+
+            alpha = self.alphas_cumprod[time]
+            alpha_next = self.alphas_cumprod[time_next]
+
+            sigma = eta * ((1 - alpha / alpha_next) * (1 - alpha_next) / (1 - alpha)).sqrt()
+            c = (1 - alpha_next - sigma ** 2).clamp(min = 0.).sqrt()
+
+            img = x_start * alpha_next.sqrt() + c * pred_noise
+
+            if eta > 0:
+                img = img + sigma * torch.randn_like(img)
+
+        return unnormalize_img(img)
+
+    @torch.inference_mode()
+    def sample(
+        self,
+        cond = None,
+        cond_scale = 1.,
+        batch_size = 16,
+        sampling_timesteps = None,
+        eta = None,
+        progress = True
+    ):
+        """
+        Generate videos, returned in [0, 1] with shape ``(batch, channels, frames, h, w)``.
+
+        Uses the full DDPM chain by default. Pass ``sampling_timesteps`` (or set it on the model)
+        below ``timesteps`` to take the much faster DDIM path instead. Set ``progress = False``
+        to silence the progress bar, which is what you want inside scripts, notebooks and CI.
+        """
         device = next(self.denoise_fn.parameters()).device
 
         if is_list_str(cond):
@@ -175,10 +286,20 @@ class VideoDiffusion(nn.Module):
         image_size = self.image_size
         channels = self.channels
         num_frames = self.num_frames
-        return self.p_sample_loop((batch_size, channels, num_frames, image_size, image_size), cond = cond, cond_scale = cond_scale)
+        shape = (batch_size, channels, num_frames, image_size, image_size)
+
+        steps = default(sampling_timesteps, self.sampling_timesteps)
+
+        if steps < self.num_timesteps:
+            return self.ddim_sample(
+                shape, cond = cond, cond_scale = cond_scale,
+                sampling_timesteps = steps, eta = eta, progress = progress
+            )
+
+        return self.p_sample_loop(shape, cond = cond, cond_scale = cond_scale, progress = progress)
 
     @torch.inference_mode()
-    def interpolate(self, x1, x2, t = None, lam = 0.5, cond = None, cond_scale = 1.):
+    def interpolate(self, x1, x2, t = None, lam = 0.5, cond = None, cond_scale = 1., progress = True):
         """Interpolate between two videos (values in [0, 1]) by noising both to step ``t`` and denoising the mix."""
         b, *_, device = *x1.shape, x1.device
         t = default(t, self.num_timesteps - 1)
@@ -194,7 +315,7 @@ class VideoDiffusion(nn.Module):
         xt1, xt2 = map(lambda x: self.q_sample(x, t=t_batched), (x1, x2))
 
         img = (1 - lam) * xt1 + lam * xt2
-        for i in tqdm(reversed(range(0, t)), desc='interpolation sample time step', total=t):
+        for i in tqdm(reversed(range(0, t)), desc='interpolation sample time step', total=t, disable = not progress):
             img = self.p_sample(img, torch.full((b,), i, device=device, dtype=torch.long), cond = cond, cond_scale = cond_scale)
 
         return unnormalize_img(img)

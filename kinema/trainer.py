@@ -78,7 +78,7 @@ class Trainer:
 
         self.ds = Dataset(folder, image_size, channels = channels, num_frames = num_frames)
 
-        logger.info('found %d videos as gif files at %s', len(self.ds), folder)
+        logger.info('found %d clips at %s', len(self.ds), folder)
         assert len(self.ds) > 0, 'need to have at least 1 video to start training (although 1 is not great, try 100k)'
 
         self.dl = cycle(data.DataLoader(
@@ -158,7 +158,8 @@ class Trainer:
 
                     self.scaler.scale(loss / self.gradient_accumulate_every).backward()
 
-                logger.info('%d: %.6f', self.step, loss.item())
+                # per-step loss is debug detail; log_fn is the supported reporting hook
+                logger.debug('%d: %.6f', self.step, loss.item())
 
             log = {'loss': loss.item()}
 
@@ -178,7 +179,8 @@ class Trainer:
                 num_samples = self.num_sample_rows ** 2
                 batches = num_to_groups(num_samples, self.batch_size)
 
-                all_videos_list = list(map(lambda n: self.ema_model.sample(batch_size=n), batches))
+                # progress bars would flood the training log, so they stay off here
+                all_videos_list = list(map(lambda n: self.ema_model.sample(batch_size=n, progress=False), batches))
                 all_videos_list = torch.cat(all_videos_list, dim = 0)
 
                 all_videos_list = F.pad(all_videos_list, (2, 2, 2, 2))
