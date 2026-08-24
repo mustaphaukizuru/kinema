@@ -1,0 +1,46 @@
+cff-version: 1.2.0
+title: "Kinema: text-to-video diffusion in PyTorch"
+message: "If you use this software, please cite it as below, alongside the original paper."
+type: software
+authors:
+  - family-names: Ukizuru
+    given-names: Mustapha
+    email: hello@mustaphaukizuru.com
+    website: "https://mustaphaukizuru.com"
+repository-code: "https://github.com/mustaphaukizuru/kinema"
+url: "https://github.com/mustaphaukizuru/kinema"
+license: MIT
+version: 0.9.0
+date-released: "2026-08-24"
+keywords:
+  - diffusion models
+  - video generation
+  - text to video
+  - pytorch
+  - deep learning
+references:
+  - type: article
+    title: "Video Diffusion Models"
+    authors:
+      - family-names: Ho
+        given-names: Jonathan
+      - family-names: Salimans
+        given-names: Tim
+      - family-names: Gritsenko
+        given-names: Alexey
+      - family-names: Chan
+        given-names: William
+      - family-names: Norouzi
+        given-names: Mohammad
+      - family-names: Fleet
+        given-names: "David J."
+    year: 2022
+    url: "https://arxiv.org/abs/2204.03458"
+  - type: software
+    title: "video-diffusion-pytorch"
+    authors:
+      - family-names: Wang
+        given-names: Phil
+    url: "https://github.com/lucidrains/video-diffusion-pytorch"
+    license: MIT
+    notes: "Upstream implementation this project builds on."

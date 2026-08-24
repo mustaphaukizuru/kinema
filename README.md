@@ -1,133 +1,116 @@
+<div align="center">
+
 ![machine imagined fireworks](./fireworks.webp)
 
-*these fireworks do not exist*
+# Kinema
 
-## Video Diffusion - Pytorch
+**Text-to-video diffusion in PyTorch — a space-time factored 3D U-Net you can actually train.**
 
-> **Note**
-> This is a maintained fork of [lucidrains/video-diffusion-pytorch](https://github.com/lucidrains/video-diffusion-pytorch),
-> the original implementation by [Phil Wang](https://github.com/lucidrains), MIT licensed.
-> This fork modernises the codebase — see [CHANGELOG.md](CHANGELOG.md) for what changed in `0.8.0`
-> (working BERT text conditioning, device-agnostic `Trainer`, optimizer checkpointing, tests and CI).
+*Complexity, simplified.*
 
+[![CI](https://github.com/mustaphaukizuru/kinema/actions/workflows/ci.yml/badge.svg)](https://github.com/mustaphaukizuru/kinema/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.9%20%E2%80%93%203.13-blue)](https://www.python.org)
+[![PyTorch](https://img.shields.io/badge/pytorch-%E2%89%A5%202.0-ee4c2c)](https://pytorch.org)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Text to video, it is happening! <a href="https://video-diffusion.github.io/">Official Project Page</a>
+</div>
 
-Implementation of <a href="https://arxiv.org/abs/2204.03458">Video Diffusion Models</a>, <a href="http://www.jonathanho.me/">Jonathan Ho</a>'s new paper extending DDPMs to Video Generation - in Pytorch. It uses a special space-time factored U-net, extending generation from 2d images to 3d videos
+---
 
-<img src="./3d-unet.png" width="500px"></img>
+*Kinema* — from the Greek **κίνημα**, *movement*: the root that gave us *cinema*.
 
-## Status
+Kinema is a clean, tested implementation of [Video Diffusion Models](https://arxiv.org/abs/2204.03458)
+(Ho et al., 2022), which extends denoising diffusion from 2D images to 3D video using a
+**space-time factored U-Net**. Text conditioning, classifier-free guidance and a batteries-included
+trainer are all here — and all covered by tests that run on CPU and GPU.
 
-14k for difficult moving mnist (converging much faster and better than <a href="https://wandb.ai/lucidrains/nuwa-moving-mnist/reports/moving-mnist-nuwa--VmlldzoxNjk3MjI3?accessToken=cx03lswmr4bxj9dhrzzm5c3xebdmfq28a4dqzsoq9n89by6ppofukq7bxp19078j">NUWA</a>) - wip
+<div align="center">
+<img src="./3d-unet.png" width="520px" alt="space-time factored 3D U-Net">
+</div>
 
-<img src="./samples/moving-mnist.gif" width="250px">
+## Why this exists
 
-The above experiments are possible only due to resources provided by <a href="https://stability.ai/">Stability.ai</a>
+Research code for video diffusion is excellent, but it tends to assume a CUDA box, a specific
+PyTorch version, and that you will never resume a run. Kinema keeps the architecture faithful to the
+paper and rebuilds everything around it: it runs on CPU, CUDA or MPS; it checkpoints optimizer state
+so training resumes correctly; text conditioning works against current `transformers`; and every
+claim here is enforced by CI on Python 3.9 through 3.13.
 
-Any new developments for text-to-video synthesis will be centralized at <a href="https://github.com/lucidrains/imagen-pytorch#text-to-video-ongoing-research">Imagen-pytorch</a>
+<div align="center">
+<img src="./samples/moving-mnist.gif" width="260px" alt="moving mnist samples">
+<br><em>Moving MNIST, ~14k steps</em>
+</div>
 
 ## Install
 
 ```bash
-pip install video-diffusion-pytorch          # core model + trainer
-pip install "video-diffusion-pytorch[text]"  # + BERT text conditioning (transformers)
+pip install kinema            # core model + trainer
+pip install "kinema[text]"    # + BERT text conditioning
 ```
 
-Requires Python >= 3.9 and PyTorch >= 2.0. Works on CPU, CUDA and MPS.
+Requires Python >= 3.9 and PyTorch >= 2.0. Runs on CPU, CUDA and Apple Silicon (MPS).
 
-## Development
+## Quickstart
 
-```bash
-git clone https://github.com/lucidrains/video-diffusion-pytorch && cd video-diffusion-pytorch
-pip install -e ".[dev,text]"
-ruff check .   # lint
-pytest         # CPU tests (CUDA tests run automatically if a GPU is present)
-```
-
-See [CHANGELOG.md](CHANGELOG.md) for what changed in this version.
-
-## Usage
+Videos are float tensors shaped `(batch, channels, frames, height, width)` with values in `[0, 1]` —
+Kinema handles normalisation internally, so you do not have to.
 
 ```python
 import torch
-from video_diffusion_pytorch import Unet3D, GaussianDiffusion
+from kinema import Unet3D, VideoDiffusion
 
 model = Unet3D(
     dim = 64,
     dim_mults = (1, 2, 4, 8)
 )
 
-diffusion = GaussianDiffusion(
+diffusion = VideoDiffusion(
     model,
     image_size = 32,
     num_frames = 5,
-    timesteps = 1000,   # number of steps
-    loss_type = 'l1'    # L1 or L2
+    timesteps = 1000,
+    loss_type = 'l1'     # 'l1' or 'l2'
 )
 
-videos = torch.randn(1, 3, 5, 32, 32) # video (batch, channels, frames, height, width) - normalized from -1 to +1
+videos = torch.rand(1, 3, 5, 32, 32)
 loss = diffusion(videos)
 loss.backward()
-# after a lot of training
 
-sampled_videos = diffusion.sample(batch_size = 4)
-sampled_videos.shape # (4, 3, 5, 32, 32)
+# after a lot of training
+sampled = diffusion.sample(batch_size = 4)
+sampled.shape  # (4, 3, 5, 32, 32)
 ```
 
-For conditioning on text, they derived text embeddings by first passing the tokenized text through BERT-large. Then you just have to train it like so
+## Conditioning on text
+
+Pass your own embeddings by declaring their width with `cond_dim`:
 
 ```python
-import torch
-from video_diffusion_pytorch import Unet3D, GaussianDiffusion
+model = Unet3D(dim = 64, cond_dim = 64, dim_mults = (1, 2, 4, 8))
+diffusion = VideoDiffusion(model, image_size = 32, num_frames = 5)
 
-model = Unet3D(
-    dim = 64,
-    cond_dim = 64,
-    dim_mults = (1, 2, 4, 8)
-)
-
-diffusion = GaussianDiffusion(
-    model,
-    image_size = 32,
-    num_frames = 5,
-    timesteps = 1000,   # number of steps
-    loss_type = 'l1'    # L1 or L2
-)
-
-videos = torch.randn(2, 3, 5, 32, 32) # video (batch, channels, frames, height, width)
-text = torch.randn(2, 64)             # assume output of BERT-large has dimension of 64
+videos = torch.rand(2, 3, 5, 32, 32)
+text   = torch.randn(2, 64)          # your embeddings
 
 loss = diffusion(videos, cond = text)
 loss.backward()
-# after a lot of training
 
-sampled_videos = diffusion.sample(cond = text)
-sampled_videos.shape # (2, 3, 5, 32, 32)
+sampled = diffusion.sample(cond = text)
 ```
 
-You can also directly pass in the descriptions of the video as strings, if you plan on using BERT-base for text conditioning (requires the `[text]` extra; BERT-base-cased is downloaded from the Hugging Face hub on first use)
+Or hand it raw strings and let Kinema embed them with BERT-base — requires the `[text]` extra.
+`bert-base-cased` is fetched from the Hugging Face hub on first use:
 
 ```python
-import torch
-from video_diffusion_pytorch import Unet3D, GaussianDiffusion
-
 model = Unet3D(
     dim = 64,
-    use_bert_text_cond = True,  # this must be set to True to auto-use the bert model dimensions
-    dim_mults = (1, 2, 4, 8),
+    use_bert_text_cond = True,       # adopts the BERT dimensions automatically
+    dim_mults = (1, 2, 4, 8)
 )
 
-diffusion = GaussianDiffusion(
-    model,
-    image_size = 32,    # height and width of frames
-    num_frames = 5,     # number of video frames
-    timesteps = 1000,   # number of steps
-    loss_type = 'l1'    # L1 or L2
-)
+diffusion = VideoDiffusion(model, image_size = 32, num_frames = 5)
 
-videos = torch.randn(3, 3, 5, 32, 32) # video (batch, channels, frames, height, width)
-
+videos = torch.rand(3, 3, 5, 32, 32)
 text = [
     'a whale breaching from afar',
     'young girl blowing out candles on her birthday cake',
@@ -136,96 +119,166 @@ text = [
 
 loss = diffusion(videos, cond = text)
 loss.backward()
-# after a lot of training
 
-sampled_videos = diffusion.sample(cond = text, cond_scale = 2)
-sampled_videos.shape # (3, 3, 5, 32, 32)
+# cond_scale > 1 strengthens classifier-free guidance
+sampled = diffusion.sample(cond = text, cond_scale = 2.)
 ```
 
 ## Training
 
-This repository also contains a handy `Trainer` class for training on a folder of `gifs`. Each `gif` must be of the correct dimensions `image_size` and `num_frames`.
+`Trainer` handles a folder of GIFs, EMA, gradient accumulation, mixed precision, periodic sampling
+and checkpointing. It runs wherever your model lives — no CUDA assumption.
 
 ```python
 import torch
-from video_diffusion_pytorch import Unet3D, GaussianDiffusion, Trainer
+from kinema import Unet3D, VideoDiffusion, Trainer
 
-model = Unet3D(
-    dim = 64,
-    dim_mults = (1, 2, 4, 8),
-)
+model = Unet3D(dim = 64, dim_mults = (1, 2, 4, 8))
 
-diffusion = GaussianDiffusion(
+diffusion = VideoDiffusion(
     model,
     image_size = 64,
     num_frames = 10,
-    timesteps = 1000,   # number of steps
-    loss_type = 'l1'    # L1 or L2
+    timesteps = 1000,
+    loss_type = 'l1'
 ).cuda()
 
 trainer = Trainer(
     diffusion,
-    './data',                         # this folder path needs to contain all your training data, as .gif files, of correct image size and number of frames
+    './data',                       # folder of .gif files
     train_batch_size = 32,
     train_lr = 1e-4,
+    train_num_steps = 700000,
+    gradient_accumulate_every = 2,
+    ema_decay = 0.995,
     save_and_sample_every = 1000,
-    train_num_steps = 700000,         # total training steps
-    gradient_accumulate_every = 2,    # gradient accumulation steps
-    ema_decay = 0.995,                # exponential moving average decay
-    amp = True                        # turn on mixed precision
+    amp = True,                     # mixed precision
+    num_workers = 4
 )
 
 trainer.train()
+trainer.load(-1)                    # resume from the newest checkpoint
 ```
 
-Sample videos (as `gif` files) will be saved to `./results` periodically, as are the diffusion model parameters.
+Samples and weights land in `./results`. Checkpoints carry model, EMA, **optimizer** and scaler
+state, so a resumed run picks up exactly where it stopped.
 
-## Co-training Images and Video
-
-One of the claims in the paper is that by doing factored space-time attention, one can force the network to attend on the present for training images and video in conjunction, leading to better results.
-
-It was not clear how they achieved this, but I furthered a guess.
-
-To arrest attention to the present moment for a certain percentage of batch videos samples, simply pass `prob_focus_present = <prob>` on the diffusion forward method
+Kinema logs through the standard `logging` module rather than printing, so it composes with your own
+setup:
 
 ```python
-loss = diffusion(videos, cond = text, prob_focus_present = 0.5) # for 50% of videos, focus on the present during training
+import logging
+logging.basicConfig(level = logging.INFO)
+```
+
+### Choosing a device
+
+```python
+trainer = Trainer(diffusion, './data', device = 'cpu')   # or 'cuda', 'mps'
+```
+
+Left unset, the trainer follows whatever device the model is already on.
+
+## Co-training images and video
+
+The paper argues that factored space-time attention lets you train on images and video together by
+forcing the network to attend to the present moment. Pass `prob_focus_present` to arrest attention
+across time for a fraction of each batch:
+
+```python
+loss = diffusion(videos, cond = text, prob_focus_present = 0.5)
 loss.backward()
 ```
 
-If you have a better idea how this is done, just open a github issue.
+## Interpolating between videos
 
-## Todo
+Noise two clips to step `t`, mix them, and denoise the result — conditioning is respected:
 
-- [x] wire up text conditioning, use classifier free guidance
-- [x] relative positional encodings in attention (space and time) - use T5 relative positional bias instead of what they used
-- [x] add a forward keyword argument that arrests attention across time (as reported / claimed in the paper, this type of image + video simultaneous training improves results)
-- [x] consider doing a 3d version of CLIP, so one can eventually apply the lessons of DALL-E2 to video https://github.com/lucidrains/dalle2-video
-- [x] offer way for Trainer to curtail or pad frames, if gif is too long
-- [ ] find a good torchvideo-like library (torchvideo seems immature) for training on fireworks
-- [ ] project text into 4-8 tokens, and use them as memory key / values to condition both time and space in attention blocks
-- [ ] prepare a jax version for large scale TPU training
-- [ ] have Trainer take care of conditional video synthesis, with text offered as corresponding {video_filename}.txt within the same folder
-- [ ] see if ffcv or squirrel-core is a good fit
-- [ ] bring in token shifts, along time and space
+```python
+blend = diffusion.interpolate(video_a, video_b, t = 500, lam = 0.5)
+blend = diffusion.interpolate(video_a, video_b, cond = text, cond_scale = 2.)
+```
+
+## Performance
+
+Measured on a laptop RTX 3050 (6 GB) at `dim = 64`, `dim_mults = (1, 2, 4, 8)`, 32x32 across 5
+frames — 35.7 M parameters:
+
+| Operation | Cost |
+|---|---|
+| Training step, batch 4 | ~0.93 s |
+| Peak VRAM, batch 4 | ~1.5 GB |
+| Sampling, 4 videos at 1000 steps | ~3.5 min |
+
+Sampling is the bottleneck, as it is for any ancestral DDPM sampler — a faster sampler is on the
+roadmap.
+
+## Development
+
+```bash
+git clone https://github.com/mustaphaukizuru/kinema && cd kinema
+pip install -e ".[dev,text]"
+
+ruff check .    # lint
+pytest          # 22 tests — CUDA tests run automatically when a GPU is present
+```
+
+The suite promotes PyTorch deprecation warnings and `ResourceWarning` to errors, so breakage from a
+new PyTorch release surfaces in CI rather than three hours into a training run.
+
+## Roadmap
+
+- [ ] DDIM / fewer-step sampler — the single biggest usability win
+- [ ] MP4 and frame-folder datasets, not GIF only
+- [ ] `scripts/train.py` CLI driven by a YAML config
+- [ ] Conditional synthesis from `{video_filename}.txt` sidecar captions
+- [ ] Project text into 4-8 tokens used as memory keys and values in attention
+- [ ] Multi-GPU training via `accelerate`
+- [ ] Token shifts along time and space
+
+## Project lineage
+
+Kinema builds on [lucidrains/video-diffusion-pytorch](https://github.com/lucidrains/video-diffusion-pytorch)
+by [Phil Wang](https://github.com/lucidrains), released under MIT — the original PyTorch
+implementation of the paper, and the source of this architecture. Kinema keeps that architecture and
+rebuilds everything around it: packaging, device handling, text conditioning, checkpointing, tests
+and CI. See [CHANGELOG.md](CHANGELOG.md) for the full record.
+
+The moving-MNIST experiments in the original work were made possible by compute from
+[Stability.ai](https://stability.ai/).
 
 ## Citations
 
 ```bibtex
 @misc{ho2022video,
-  title   = {Video Diffusion Models}, 
-  author  = {Jonathan Ho and Tim Salimans and Alexey Gritsenko and William Chan and Mohammad Norouzi and David J. Fleet},
-  year    = {2022},
-  eprint  = {2204.03458},
+  title         = {Video Diffusion Models},
+  author        = {Jonathan Ho and Tim Salimans and Alexey Gritsenko and William Chan and Mohammad Norouzi and David J. Fleet},
+  year          = {2022},
+  eprint        = {2204.03458},
   archivePrefix = {arXiv},
-  primaryClass = {cs.CV}
+  primaryClass  = {cs.CV}
 }
 ```
 
 ```bibtex
-@misc{Saharia2022,
-    title   = {Imagen: unprecedented photorealism × deep level of language understanding},
-    author  = {Chitwan Saharia*, William Chan*, Saurabh Saxena†, Lala Li†, Jay Whang†, Emily Denton, Seyed Kamyar Seyed Ghasemipour, Burcu Karagol Ayan, S. Sara Mahdavi, Rapha Gontijo Lopes, Tim Salimans, Jonathan Ho†, David Fleet†, Mohammad Norouzi*},
-    year    = {2022}
+@misc{saharia2022imagen,
+  title  = {Imagen: unprecedented photorealism, deep level of language understanding},
+  author = {Chitwan Saharia and William Chan and Saurabh Saxena and Lala Li and Jay Whang and Emily Denton and Seyed Kamyar Seyed Ghasemipour and Burcu Karagol Ayan and S. Sara Mahdavi and Rapha Gontijo Lopes and Tim Salimans and Jonathan Ho and David Fleet and Mohammad Norouzi},
+  year   = {2022}
 }
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+## Maintainer
+
+**Mustapha Ukizuru** — IT Manager & Full-Stack Developer · CS Educator · Tech Consultant
+
+[mustaphaukizuru.com](https://mustaphaukizuru.com) ·
+[LinkedIn](https://linkedin.com/in/mustaphaukizuru) ·
+[GitHub](https://github.com/mustaphaukizuru) ·
+[hello@mustaphaukizuru.com](mailto:hello@mustaphaukizuru.com)
+
+*Build it. Simplify it. Scale it.*

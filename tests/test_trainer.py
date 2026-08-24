@@ -2,7 +2,7 @@ import warnings
 
 import torch
 
-from video_diffusion_pytorch import Dataset, GaussianDiffusion, Trainer, Unet3D, gif_to_tensor, video_tensor_to_gif
+from kinema import Dataset, Trainer, Unet3D, VideoDiffusion, gif_to_tensor, video_tensor_to_gif
 
 
 def _write_gifs(folder, n = 3, frames = 4):
@@ -31,7 +31,7 @@ def test_trainer_train_save_load(tmp_path, device):
     (tmp_path / 'data').mkdir()
     _write_gifs(tmp_path / 'data')
     model = Unet3D(dim = 8, dim_mults = (1, 2), attn_heads = 2, attn_dim_head = 8)
-    diff = GaussianDiffusion(model, image_size = 16, num_frames = 4, timesteps = 5)
+    diff = VideoDiffusion(model, image_size = 16, num_frames = 4, timesteps = 5)
     trainer = Trainer(
         diff, tmp_path / 'data', device = device, train_batch_size = 2, train_num_steps = 3,
         save_and_sample_every = 2, results_folder = tmp_path / 'results', amp = device == 'cuda',

@@ -1,9 +1,9 @@
 """Text-conditioning path with BERT mocked out (no network / 400 MB download in CI)."""
 import torch
 
-from video_diffusion_pytorch import GaussianDiffusion, Unet3D
-from video_diffusion_pytorch import text as text_mod
-from video_diffusion_pytorch.text import BERT_MODEL_DIM
+from kinema import Unet3D, VideoDiffusion
+from kinema import text as text_mod
+from kinema.text import BERT_MODEL_DIM
 
 
 class FakeOutputs:
@@ -51,7 +51,7 @@ def test_bert_embed_masked_mean_and_cls(monkeypatch):
 def test_string_conditioning_end_to_end(monkeypatch):
     _patch(monkeypatch)
     model = Unet3D(dim = 8, dim_mults = (1, 2), attn_heads = 2, attn_dim_head = 8, use_bert_text_cond = True)
-    diff = GaussianDiffusion(model, image_size = 16, num_frames = 2, timesteps = 5)
+    diff = VideoDiffusion(model, image_size = 16, num_frames = 2, timesteps = 5)
     texts = ['a cat', 'fireworks']
     diff(torch.rand(2, 3, 2, 16, 16), cond = texts).backward()
     assert diff.sample(cond = texts, cond_scale = 2.).shape == (2, 3, 2, 16, 16)

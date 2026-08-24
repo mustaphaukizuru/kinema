@@ -3,26 +3,31 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "video-diffusion-pytorch"
+name = "kinema"
 dynamic = ["version"]
-description = "Video Diffusion Models (Ho et al. 2022) - space-time factored 3D U-Net DDPM in PyTorch"
+description = "Text-to-video diffusion in PyTorch — a space-time factored 3D U-Net you can actually train"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.9"
-authors = [{ name = "Phil Wang", email = "lucidrains@gmail.com" }]
-maintainers = [{ name = "UKIZURU Mustapha" }]
+authors = [{ name = "Mustapha Ukizuru", email = "hello@mustaphaukizuru.com" }]
+maintainers = [{ name = "Mustapha Ukizuru", email = "hello@mustaphaukizuru.com" }]
 keywords = [
     "artificial intelligence",
     "deep learning",
-    "denoising diffusion probabilistic models",
+    "diffusion models",
+    "text to video",
     "video generation",
+    "pytorch",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
+    "Intended Audience :: Education",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Multimedia :: Video",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
@@ -42,17 +47,20 @@ dependencies = [
 
 [project.optional-dependencies]
 text = ["transformers>=4.30", "sentencepiece", "sacremoses"]
-dev = ["pytest>=7", "ruff>=0.4"]
+dev = ["pytest>=7", "ruff>=0.4", "build>=1.0"]
 
 [project.urls]
-Homepage = "https://github.com/lucidrains/video-diffusion-pytorch"
+Homepage = "https://mustaphaukizuru.com"
+Repository = "https://github.com/mustaphaukizuru/kinema"
+Changelog = "https://github.com/mustaphaukizuru/kinema/blob/main/CHANGELOG.md"
+Issues = "https://github.com/mustaphaukizuru/kinema/issues"
 Paper = "https://arxiv.org/abs/2204.03458"
 
 [tool.setuptools]
-packages = ["video_diffusion_pytorch"]
+packages = ["kinema"]
 
 [tool.setuptools.dynamic]
-version = { attr = "video_diffusion_pytorch.video_diffusion_pytorch.__version__" }
+version = { attr = "kinema.version.__version__" }
 
 [tool.ruff]
 line-length = 140

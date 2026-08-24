@@ -1,12 +1,12 @@
 import pytest
 import torch
 
-from video_diffusion_pytorch import GaussianDiffusion, Unet3D
+from kinema import Unet3D, VideoDiffusion
 
 
 def make(device, cond_dim = None, **kw):
     model = Unet3D(dim = 8, dim_mults = (1, 2), attn_heads = 2, attn_dim_head = 8, cond_dim = cond_dim, **kw)
-    return GaussianDiffusion(model, image_size = 16, num_frames = 2, timesteps = 10).to(device)
+    return VideoDiffusion(model, image_size = 16, num_frames = 2, timesteps = 10).to(device)
 
 
 def test_train_step_shapes(device):
@@ -19,7 +19,7 @@ def test_train_step_shapes(device):
 @pytest.mark.parametrize('loss_type', ['l1', 'l2'])
 def test_loss_types(loss_type):
     model = Unet3D(dim = 8, dim_mults = (1, 2), attn_heads = 2, attn_dim_head = 8)
-    diff = GaussianDiffusion(model, image_size = 16, num_frames = 2, timesteps = 10, loss_type = loss_type)
+    diff = VideoDiffusion(model, image_size = 16, num_frames = 2, timesteps = 10, loss_type = loss_type)
     assert torch.isfinite(diff(torch.rand(1, 3, 2, 16, 16)))
 
 
@@ -44,7 +44,7 @@ def test_cond_required():
 
 def test_dynamic_thresholding():
     model = Unet3D(dim = 8, dim_mults = (1, 2), attn_heads = 2, attn_dim_head = 8)
-    diff = GaussianDiffusion(model, image_size = 16, num_frames = 2, timesteps = 5, use_dynamic_thres = True)
+    diff = VideoDiffusion(model, image_size = 16, num_frames = 2, timesteps = 5, use_dynamic_thres = True)
     assert diff.sample(batch_size = 1).shape == (1, 3, 2, 16, 16)
 
 
