@@ -3,6 +3,32 @@
 All notable changes to Kinema are recorded here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.18.0 — 2026-08-25
+
+### Added
+- **v-parameterisation.** `VideoDiffusion(..., objective = 'v')` trains the network to predict
+  velocity rather than noise, after
+  [Progressive Distillation](https://arxiv.org/abs/2202.00512). It is better conditioned at the
+  noisy end of the chain and tends to hold up better at low step counts, which pairs naturally
+  with DDIM.
+
+  The architecture is unchanged — only the training target differs — so the two are
+  interchangeable in shape but **not in meaning**: a checkpoint trained on one objective must be
+  sampled with the same one.
+
+- `VideoDiffusion.model_predictions()`, which runs the network and returns `(pred_noise, x_start)`
+  whatever it was trained to predict. Both samplers go through it, so a new objective needs no
+  changes to either. `predict_v()` and `predict_start_from_v()` are public alongside it.
+
+### Changed
+- `p_mean_variance()` and the DDIM loop each had their own copy of the "predict, clip, recompute
+  the noise" sequence. They now share one.
+
+### Verified
+ruff clean, 203 tests passing on CPU and CUDA. Because this refactor touched the path every sampler
+takes, a test asserts the default `noise` objective produces **bit-identical** output to the inline
+sequence it replaced — this is an addition, not a silent change in behaviour.
+
 ## 0.17.0 — 2026-08-25
 
 You can now tell which checkpoint is better. Until this release there was no way to, which is a

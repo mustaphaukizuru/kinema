@@ -13,7 +13,7 @@
 [![CI](https://github.com/mustaphaukizuru/kinema/actions/workflows/ci.yml/badge.svg)](https://github.com/mustaphaukizuru/kinema/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.9%20%E2%80%93%203.13-3776ab)](https://www.python.org)
 [![PyTorch](https://img.shields.io/badge/pytorch-%E2%89%A5%202.0-ee4c2c)](https://pytorch.org)
-[![Tests](https://img.shields.io/badge/tests-184%20passing-2ea44f)](tests)
+[![Tests](https://img.shields.io/badge/tests-203%20passing-2ea44f)](tests)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
 
 [Install](#install) · [Running it](#running-it) · [Quickstart](#quickstart) · [CLI](#command-line) · [Sampling](#faster-sampling-with-ddim) · [Training](#training) · [API](#api-reference) · [Benchmarks](#benchmarks) · [FAQ](#faq)
@@ -54,7 +54,7 @@ you can depend on.
 | **Running it** | Write your own training script | `kinema train -c config.yaml` |
 | **Install weight** | Transformers pulled in whether you need it or not | Optional `[text]` extra |
 | **Structure** | One 1,000-line file | Eight focused modules |
-| **Verification** | None | 184 tests, CI on Python 3.9 – 3.13 |
+| **Verification** | None | 203 tests, CI on Python 3.9 – 3.13 |
 | **Warnings** | Accumulate quietly until something breaks | Deprecations fail the build |
 
 <div align="center">
@@ -633,6 +633,20 @@ Four to eight tokens is the useful range. The tokens carry no positional bias, t
 queries arrested by `prob_focus_present`, and classifier-free guidance drops the caption from the
 memory tokens and the timestep embedding together — so `cond_scale` keeps meaning what it meant.
 
+### Prediction objective
+
+The network can be trained to predict the noise (the original DDPM target, and the default) or the
+velocity from [Progressive Distillation](https://arxiv.org/abs/2202.00512):
+
+```python
+diffusion = VideoDiffusion(unet, image_size = 64, num_frames = 10, objective = 'v')
+```
+
+`v` is better conditioned at the noisy end of the chain and tends to hold up better at low step
+counts, which pairs naturally with DDIM. The architecture is identical — only the training target
+changes — so the two are interchangeable in shape but **not in meaning**: a checkpoint trained on
+one objective must be sampled with the same one.
+
 ### Token shift
 
 Cheap local mixing along time, and optionally height and width: half the channels are split between
@@ -677,6 +691,7 @@ and the reverse — you can switch it on mid-project without retraining from scr
 | `sampling_timesteps` | `= timesteps` | Fewer than `timesteps` switches `sample()` to DDIM |
 | `ddim_sampling_eta` | `0.` | DDIM noise; `0.` is deterministic, `1.` recovers DDPM |
 | `cond_drop_prob` | `0.1` | How often the caption is dropped in training, for guidance |
+| `objective` | `'noise'` | `'v'` selects velocity prediction, better conditioned at few steps |
 | `loss_type` | `'l1'` | `'l1'` or `'l2'` |
 | `use_dynamic_thres` | `False` | Percentile thresholding when sampling |
 | `dynamic_thres_percentile` | `0.9` | Percentile used when enabled |
@@ -690,6 +705,7 @@ and the reverse — you can switch it on mid-project without retraining from scr
 | `ddim_sample(shape, ...)` | The DDIM loop directly, if you want to drive it yourself |
 | `interpolate(x1, x2, t=None, lam=0.5, cond=None, cond_scale=1., sampling_timesteps=None, eta=None, progress=True)` | Blends two clips, DDPM or DDIM |
 | `ddim_loop(img, from_step, steps, ...)` | The strided reverse walk both samplers share |
+| `model_predictions(x, t, ...)` | Runs the network, returns `(pred_noise, x_start)` for either objective |
 
 ### `Trainer`
 
@@ -813,7 +829,7 @@ python -m venv .venv && .venv\Scripts\Activate.ps1     # Unix: source .venv/bin/
 pip install -e ".[dev,text]"
 
 ruff check .    # lint
-pytest          # 184 tests; CUDA tests run automatically when a GPU is present
+pytest          # 203 tests; CUDA tests run automatically when a GPU is present
 ```
 
 Runnable examples live in [examples/](examples):

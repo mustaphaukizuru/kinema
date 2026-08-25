@@ -47,6 +47,7 @@ class VideoDiffusion(nn.Module):
         sampling_timesteps = None,
         ddim_sampling_eta = 0.,
         cond_drop_prob = 0.1,
+        objective = 'noise',
         loss_type = 'l1',
         use_dynamic_thres = False, # from the Imagen paper
         dynamic_thres_percentile = 0.9
@@ -108,6 +109,13 @@ class VideoDiffusion(nn.Module):
         # `cond_scale` extrapolates away from noise rather than from a learned prior.
         self.cond_drop_prob = cond_drop_prob
 
+        # What the network is asked to predict. 'noise' is the original DDPM target and the
+        # default. 'v' is the velocity parameterisation from https://arxiv.org/abs/2202.00512,
+        # which is better conditioned at the noisy end of the chain and behaves better with few
+        # sampling steps. Both use the same architecture — only the training target differs.
+        assert objective in ('noise', 'v'), f"objective must be 'noise' or 'v', got {objective!r}"
+        self.objective = objective
+
         # dynamic thresholding when sampling
 
         self.use_dynamic_thres = use_dynamic_thres
@@ -145,6 +153,42 @@ class VideoDiffusion(nn.Module):
             extract(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape) * noise
         )
 
+    def predict_v(self, x_start, t, noise):
+        """The velocity target: what the network learns to predict when ``objective = 'v'``."""
+        return (
+            extract(self.sqrt_alphas_cumprod, t, x_start.shape) * noise -
+            extract(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * x_start
+        )
+
+    def predict_start_from_v(self, x_t, t, v):
+        """Recover x_0 from a velocity prediction."""
+        return (
+            extract(self.sqrt_alphas_cumprod, t, x_t.shape) * x_t -
+            extract(self.sqrt_one_minus_alphas_cumprod, t, x_t.shape) * v
+        )
+
+    def model_predictions(self, x, t, cond = None, cond_scale = 1., clip_denoised = True):
+        """
+        Run the network and return ``(pred_noise, x_start)``, whatever it was trained to predict.
+
+        Both samplers need the pair, and both objectives can supply it — keeping the conversion
+        in one place is what lets 'noise' and 'v' share every sampler.
+        """
+        output = self.denoise_fn.forward_with_cond_scale(x, t, cond = cond, cond_scale = cond_scale)
+
+        if self.objective == 'v':
+            x_start = self.predict_start_from_v(x, t, output)
+        else:
+            x_start = self.predict_start_from_noise(x, t = t, noise = output)
+
+        if clip_denoised:
+            x_start = self.clip_x_start(x_start)
+
+        # after clipping, the noise must be recomputed to stay consistent with x_start
+        pred_noise = self.predict_noise_from_start(x, t = t, x_start = x_start)
+
+        return pred_noise, x_start
+
     def predict_noise_from_start(self, x_t, t, x_start):
         """Inverse of ``predict_start_from_noise`` — recover the noise implied by a (possibly clipped) x_0."""
         return (
@@ -161,11 +205,9 @@ class VideoDiffusion(nn.Module):
         return posterior_mean, posterior_variance, posterior_log_variance_clipped
 
     def p_mean_variance(self, x, t, clip_denoised: bool, cond = None, cond_scale = 1.):
-        noise = self.denoise_fn.forward_with_cond_scale(x, t, cond = cond, cond_scale = cond_scale)
-        x_recon = self.predict_start_from_noise(x, t = t, noise = noise)
-
-        if clip_denoised:
-            x_recon = self.clip_x_start(x_recon)
+        _, x_recon = self.model_predictions(
+            x, t, cond = cond, cond_scale = cond_scale, clip_denoised = clip_denoised
+        )
 
         model_mean, posterior_variance, posterior_log_variance = self.q_posterior(x_start=x_recon, x_t=x, t=t)
         return model_mean, posterior_variance, posterior_log_variance
@@ -269,13 +311,9 @@ class VideoDiffusion(nn.Module):
         for time, time_next in tqdm(time_pairs, desc = desc, disable = not progress):
             t = torch.full((b,), time, device = device, dtype = torch.long)
 
-            pred_noise = self.denoise_fn.forward_with_cond_scale(img, t, cond = cond, cond_scale = cond_scale)
-            x_start = self.predict_start_from_noise(img, t = t, noise = pred_noise)
-
-            if clip_denoised:
-                x_start = self.clip_x_start(x_start)
-                # clipping moved x_0, so the noise term must be recomputed to stay consistent with it
-                pred_noise = self.predict_noise_from_start(img, t = t, x_start = x_start)
+            pred_noise, x_start = self.model_predictions(
+                img, t, cond = cond, cond_scale = cond_scale, clip_denoised = clip_denoised
+            )
 
             if time_next < 0:
                 img = x_start
@@ -396,10 +434,12 @@ class VideoDiffusion(nn.Module):
 
         x_recon = self.denoise_fn(x_noisy, t, cond = cond, **kwargs)
 
+        target = noise if self.objective == 'noise' else self.predict_v(x_start, t, noise)
+
         if self.loss_type == 'l1':
-            loss = F.l1_loss(noise, x_recon)
+            loss = F.l1_loss(target, x_recon)
         elif self.loss_type == 'l2':
-            loss = F.mse_loss(noise, x_recon)
+            loss = F.mse_loss(target, x_recon)
         else:
             raise NotImplementedError()
 
