@@ -13,7 +13,7 @@
 [![CI](https://github.com/mustaphaukizuru/kinema/actions/workflows/ci.yml/badge.svg)](https://github.com/mustaphaukizuru/kinema/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.9%20%E2%80%93%203.13-3776ab)](https://www.python.org)
 [![PyTorch](https://img.shields.io/badge/pytorch-%E2%89%A5%202.0-ee4c2c)](https://pytorch.org)
-[![Tests](https://img.shields.io/badge/tests-71%20passing-2ea44f)](tests)
+[![Tests](https://img.shields.io/badge/tests-80%20passing-2ea44f)](tests)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
 
 [Install](#install) · [Quickstart](#quickstart) · [CLI](#command-line) · [Sampling](#faster-sampling-with-ddim) · [Training](#training) · [API](#api-reference) · [Benchmarks](#benchmarks) · [FAQ](#faq)
@@ -54,7 +54,7 @@ you can depend on.
 | **Running it** | Write your own training script | `kinema train -c config.yaml` |
 | **Install weight** | Transformers pulled in whether you need it or not | Optional `[text]` extra |
 | **Structure** | One 1,000-line file | Eight focused modules |
-| **Verification** | None | 71 tests, CI on Python 3.9 – 3.13 |
+| **Verification** | None | 80 tests, CI on Python 3.9 – 3.13 |
 | **Warnings** | Accumulate quietly until something breaks | Deprecations fail the build |
 
 <div align="center">
@@ -71,7 +71,8 @@ pip install kinema                     # core model + trainer
 pip install "kinema[text]"             # + BERT text conditioning
 pip install "kinema[video]"            # + MP4 / WebM / MOV decoding
 pip install "kinema[cli]"              # + the kinema command and YAML configs
-pip install "kinema[text,video,cli]"   # everything
+pip install "kinema[viz]"              # + TensorBoard monitoring
+pip install "kinema[text,video,cli,viz]"   # everything
 ```
 
 Python ≥ 3.9, PyTorch ≥ 2.0. Runs on CPU, CUDA and MPS.
@@ -400,11 +401,44 @@ import logging
 logging.basicConfig(level = logging.INFO)
 ```
 
-For structured logging, pass a callback — it receives a dict per step:
+For structured logging, pass a callback — it receives a dict per step carrying `step`, `loss`,
+and a `sample` path whenever a milestone clip is written:
 
 ```python
 trainer.train(log_fn = lambda log: wandb.log(log))
 ```
+
+### Watching training
+
+```bash
+pip install "kinema[viz]"
+kinema train -c configs/moving-mnist.yaml --tensorboard
+tensorboard --logdir results/tb        # then open http://localhost:6006
+```
+
+Or from Python:
+
+```python
+from kinema.monitor import TensorBoardLogger
+
+with TensorBoardLogger('./results/tb') as tb:
+    trainer.train(log_fn = tb)
+```
+
+**Watch the samples, not the loss.** Diffusion loss wanders while quality improves steadily, so
+this logger sends the periodic sample clips to TensorBoard alongside the scalars. A recorded run
+makes the point — loss went *up* between steps 2000 and 4000 while reconstruction error fell by
+more than half:
+
+| Steps | Training loss | Reconstruction error |
+|---:|---:|---:|
+| 1000 | 0.0725 | 0.3162 |
+| 2000 | 0.0421 | 0.1846 |
+| 3000 | 0.0507 | 0.1637 |
+| 4000 | 0.0613 | **0.0497** |
+
+Clips log as video when `moviepy` is installed and as frame strips otherwise; both land under the
+`samples/` tag.
 
 ### Co-training on images and video
 
@@ -576,7 +610,7 @@ python -m venv .venv && .venv\Scripts\Activate.ps1     # Unix: source .venv/bin/
 pip install -e ".[dev,text]"
 
 ruff check .    # lint
-pytest          # 71 tests; CUDA tests run automatically when a GPU is present
+pytest          # 80 tests; CUDA tests run automatically when a GPU is present
 ```
 
 Runnable examples live in [examples/](examples):

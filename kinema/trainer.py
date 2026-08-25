@@ -174,7 +174,7 @@ class Trainer:
                 # per-step loss is debug detail; log_fn is the supported reporting hook
                 logger.debug('%d: %.6f', self.step, loss.item())
 
-            log = {'loss': loss.item()}
+            log = {'step': self.step, 'loss': loss.item()}
 
             if exists(self.max_grad_norm):
                 self.scaler.unscale_(self.opt)

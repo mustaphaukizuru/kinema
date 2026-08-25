@@ -3,6 +3,47 @@
 All notable changes to Kinema are recorded here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.12.0 — 2026-08-24
+
+You can now watch a run instead of reading numbers off a terminal.
+
+### Added
+- **TensorBoard monitoring.** `kinema train --tensorboard`, or `TensorBoardLogger` as a `log_fn`:
+
+  ```python
+  from kinema.monitor import TensorBoardLogger
+
+  with TensorBoardLogger('./results/tb') as tb:
+      trainer.train(log_fn = tb)
+  ```
+
+  Scalars go in every step; the periodic **sample clips** go in too, because diffusion loss is a
+  poor progress signal and the samples are not. From a recorded run, loss rose between steps 2000
+  and 4000 while reconstruction error more than halved:
+
+  | Steps | Training loss | Reconstruction error |
+  |---:|---:|---:|
+  | 2000 | 0.0421 | 0.1846 |
+  | 3000 | 0.0507 | 0.1637 |
+  | 4000 | 0.0613 | 0.0497 |
+
+  Clips log as video when `moviepy` is present and as frame strips otherwise. Needs the new
+  `[viz]` extra.
+
+- `Trainer`'s `log_fn` dict now carries `step`, so a logger no longer needs a closure over the
+  trainer to know where it is.
+
+### Fixed
+- **Sample clips were silently dropped when `moviepy` was missing.** `torch`'s `add_video` prints
+  a message and returns instead of raising, so an `except ImportError` fallback never fired and
+  the clip vanished with no error — the event file held scalars and nothing else. Availability is
+  now detected up front, and a regression test asserts the clip reaches the event file by one
+  route or the other.
+
+### Verified
+ruff clean, 80 tests passing on CPU and CUDA, and a live TensorBoard server confirmed serving both
+`train/loss` and `samples/frames` over HTTP from a real training run.
+
 ## 0.11.0 — 2026-08-24
 
 Text-conditioned training now needs a folder of videos and a folder of text files, and nothing else.

@@ -141,14 +141,32 @@ def cmd_train(args):
         trainer.load(args.resume)
         logger.info('resumed from milestone %s at step %d', args.resume, trainer.step)
 
-    def log_fn(log):
+    def report(log):
         if trainer.step % args.log_every == 0:
             message = f"step {trainer.step}  loss {log['loss']:.4f}"
             if 'sample' in log:
                 message += f"  sample {log['sample']}"
             print(message, flush = True)
 
-    trainer.train(log_fn = log_fn)
+    board = None
+    if args.tensorboard:
+        from kinema.monitor import TensorBoardLogger
+
+        log_dir = Path(config['trainer']['results_folder']) / 'tb' if args.tensorboard is True else args.tensorboard
+        board = TensorBoardLogger(log_dir)
+        print(f'tensorboard --logdir {log_dir}', flush = True)
+
+    def log_fn(log):
+        report(log)
+        if board is not None:
+            board(log)
+
+    try:
+        trainer.train(log_fn = log_fn)
+    finally:
+        if board is not None:
+            board.close()
+
     return 0
 
 
@@ -202,6 +220,8 @@ def main(argv = None):
     train.add_argument('--resume', type = int, nargs = '?', const = -1, metavar = 'MILESTONE',
                        help = 'resume from a checkpoint milestone; -1 or a bare flag means the latest')
     train.add_argument('--log-every', type = int, default = 10, help = 'print a line every N steps')
+    train.add_argument('--tensorboard', nargs = '?', const = True, metavar = 'LOGDIR',
+                       help = 'log scalars and sample clips to TensorBoard (default: <results_folder>/tb)')
     train.set_defaults(func = cmd_train)
 
     sample = sub.add_parser('sample', help = 'generate videos from a checkpoint')
