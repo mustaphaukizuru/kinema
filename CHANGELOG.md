@@ -3,6 +3,41 @@
 All notable changes to Kinema are recorded here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.17.0 — 2026-08-25
+
+You can now tell which checkpoint is better. Until this release there was no way to, which is a
+strange gap for a trainable model.
+
+### Added
+- **`kinema eval`** and the `kinema.evaluate` module.
+
+  ```
+  $ kinema eval results/model-*.pt -c configs/moving-mnist.yaml --ema
+
+  checkpoint                        step          loss
+  ----------------------------------------------------
+  model-1.pt                         300      0.191026
+  model-2.pt                         600      0.133042  <- best
+  ```
+
+  Training loss cannot answer this. Every step draws a fresh timestep and fresh noise, so
+  consecutive losses measure *different problems* — the number wanders while the model improves,
+  which is what it did in the runs behind the 0.12.0 benchmark. Fixing the clips, the timesteps
+  and the noise removes that variance entirely, leaving a figure that means the same thing for
+  every checkpoint.
+
+  It needs no reference model, no I3D download and no held-out labels — only the dataset already
+  on disk. The noise is drawn from seeded CPU generators, so a score is reproducible across
+  machines and devices, and unaffected by whatever the ambient RNG is doing.
+
+- `deterministic_loss()`, `fixed_problems()` and `compare()` in `kinema.evaluate`, usable directly.
+
+### Verified
+ruff clean, 184 tests passing on CPU and CUDA, and the command driven against two real checkpoints
+from one run: it ranks step 600 above step 300 and returns byte-identical scores across invocations.
+A test also trains a model briefly and asserts its score improves, so the metric is known to move
+in the right direction rather than merely being stable.
+
 ## 0.16.0 — 2026-08-25
 
 Everything here is about a long run surviving contact with reality: reproducing it, not filling the

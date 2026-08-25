@@ -25,8 +25,9 @@ from pathlib import Path  # noqa: E402
 
 import torch  # noqa: E402
 
-from kinema.data import video_tensor_to_gif, video_tensor_to_mp4  # noqa: E402
+from kinema.data import Dataset, video_tensor_to_gif, video_tensor_to_mp4  # noqa: E402
 from kinema.diffusion import VideoDiffusion  # noqa: E402
+from kinema.evaluate import deterministic_loss  # noqa: E402
 from kinema.trainer import Trainer  # noqa: E402
 from kinema.unet import Unet3D  # noqa: E402
 from kinema.utils import seed_everything  # noqa: E402
@@ -294,6 +295,46 @@ def cmd_sample(args):
     return 0
 
 
+def cmd_eval(args):
+    config = validate(load_config(args.config, args.set))
+    device = resolve_device(args.device)
+
+    diffusion = build(config, device)
+    dataset = Dataset(
+        config['data']['folder'],
+        config['diffusion']['image_size'],
+        num_frames = config['diffusion']['num_frames'],
+    )
+    logger.info('%d clips in %s', len(dataset), config['data']['folder'])
+
+    results = []
+
+    for path in args.checkpoints:
+        checkpoint = torch.load(path, map_location = device, weights_only = True)
+        diffusion.load_state_dict(checkpoint['ema' if args.ema else 'model'])
+
+        loss = deterministic_loss(
+            diffusion, dataset,
+            num_problems = args.problems,
+            batch_size = args.batch_size,
+            seed = args.seed if exists_arg(args, 'seed') else 0,
+            device = device,
+            progress = not args.quiet
+        )
+        results.append((Path(path).name, checkpoint.get('step', -1), loss))
+
+    best = min(results, key = lambda row: row[2])
+
+    print()
+    print(f'{"checkpoint":<28}{"step":>10}{"loss":>14}')
+    print('-' * 52)
+    for name, step, loss in results:
+        marker = '  <- best' if (name, step, loss) == best else ''
+        print(f'{name:<28}{step:>10}{loss:>14.6f}{marker}')
+
+    return 0
+
+
 def main(argv = None):
     parser = argparse.ArgumentParser(prog = 'kinema', description = 'Text-to-video diffusion in PyTorch.')
     parser.add_argument('--version', action = 'version', version = f'kinema {__version__}')
@@ -332,6 +373,19 @@ def main(argv = None):
     sample.add_argument('--ema', action = 'store_true', help = 'sample from the EMA weights')
     sample.add_argument('-q', '--quiet', action = 'store_true', help = 'hide the sampling progress bar')
     sample.set_defaults(func = cmd_sample)
+
+    evaluate = sub.add_parser(
+        'eval',
+        help = 'score checkpoints on identical problems, so they can be compared'
+    )
+    common(evaluate)
+    evaluate.add_argument('checkpoints', nargs = '+', help = 'one or more .pt checkpoints')
+    evaluate.add_argument('--problems', type = int, default = 16,
+                          help = 'how many fixed (clip, timestep, noise) problems to average over')
+    evaluate.add_argument('--batch-size', type = int, default = 1, help = 'clips per problem')
+    evaluate.add_argument('--ema', action = 'store_true', help = 'score the EMA weights')
+    evaluate.add_argument('-q', '--quiet', action = 'store_true', help = 'hide the progress bar')
+    evaluate.set_defaults(func = cmd_eval)
 
     args = parser.parse_args(argv)
 

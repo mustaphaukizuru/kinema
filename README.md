@@ -13,7 +13,7 @@
 [![CI](https://github.com/mustaphaukizuru/kinema/actions/workflows/ci.yml/badge.svg)](https://github.com/mustaphaukizuru/kinema/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.9%20%E2%80%93%203.13-3776ab)](https://www.python.org)
 [![PyTorch](https://img.shields.io/badge/pytorch-%E2%89%A5%202.0-ee4c2c)](https://pytorch.org)
-[![Tests](https://img.shields.io/badge/tests-172%20passing-2ea44f)](tests)
+[![Tests](https://img.shields.io/badge/tests-184%20passing-2ea44f)](tests)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
 
 [Install](#install) · [Running it](#running-it) · [Quickstart](#quickstart) · [CLI](#command-line) · [Sampling](#faster-sampling-with-ddim) · [Training](#training) · [API](#api-reference) · [Benchmarks](#benchmarks) · [FAQ](#faq)
@@ -54,7 +54,7 @@ you can depend on.
 | **Running it** | Write your own training script | `kinema train -c config.yaml` |
 | **Install weight** | Transformers pulled in whether you need it or not | Optional `[text]` extra |
 | **Structure** | One 1,000-line file | Eight focused modules |
-| **Verification** | None | 172 tests, CI on Python 3.9 – 3.13 |
+| **Verification** | None | 184 tests, CI on Python 3.9 – 3.13 |
 | **Warnings** | Accumulate quietly until something breaks | Deprecations fail the build |
 
 <div align="center">
@@ -174,6 +174,27 @@ so stopping it never affects training.
 
 Look at the **IMAGES** tab rather than SCALARS — diffusion loss wanders while quality improves,
 so the samples are the honest signal.
+
+### Compare checkpoints
+
+```bash
+kinema eval results/model-*.pt -c configs/moving-mnist.yaml --ema
+```
+
+```
+checkpoint                        step          loss
+----------------------------------------------------
+model-1.pt                         300      0.191026
+model-2.pt                         600      0.133042  <- best
+```
+
+**Training loss cannot tell you this.** Every training step draws a fresh timestep and fresh
+noise, so consecutive losses measure different problems — a model can improve while the number
+rises, which is exactly what happens in practice.
+
+`kinema eval` fixes the clips, the timesteps and the noise, so the number means the same thing for
+every checkpoint. Same seed, same score, on any machine. It needs no reference model and no extra
+download.
 
 ### Reproduce a result
 
@@ -716,6 +737,7 @@ Yields tensors, or `(video, caption)` pairs when captions are in play. `has_capt
 | `kinema.trainer` | `Trainer` and EMA |
 | `kinema.data` | `Dataset`, GIF/MP4/frame-folder read and write |
 | `kinema.cli` | The `kinema` command and YAML config handling |
+| `kinema.evaluate` | Deterministic scoring, for comparing checkpoints |
 | `kinema.text` | BERT tokenisation and embedding |
 | `kinema.utils` | Shared helpers |
 
@@ -791,7 +813,7 @@ python -m venv .venv && .venv\Scripts\Activate.ps1     # Unix: source .venv/bin/
 pip install -e ".[dev,text]"
 
 ruff check .    # lint
-pytest          # 172 tests; CUDA tests run automatically when a GPU is present
+pytest          # 184 tests; CUDA tests run automatically when a GPU is present
 ```
 
 Runnable examples live in [examples/](examples):
