@@ -13,10 +13,10 @@
 [![CI](https://github.com/mustaphaukizuru/kinema/actions/workflows/ci.yml/badge.svg)](https://github.com/mustaphaukizuru/kinema/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.9%20%E2%80%93%203.13-3776ab)](https://www.python.org)
 [![PyTorch](https://img.shields.io/badge/pytorch-%E2%89%A5%202.0-ee4c2c)](https://pytorch.org)
-[![Tests](https://img.shields.io/badge/tests-130%20passing-2ea44f)](tests)
+[![Tests](https://img.shields.io/badge/tests-136%20passing-2ea44f)](tests)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
 
-[Install](#install) · [Quickstart](#quickstart) · [CLI](#command-line) · [Sampling](#faster-sampling-with-ddim) · [Training](#training) · [API](#api-reference) · [Benchmarks](#benchmarks) · [FAQ](#faq)
+[Install](#install) · [Running it](#running-it) · [Quickstart](#quickstart) · [CLI](#command-line) · [Sampling](#faster-sampling-with-ddim) · [Training](#training) · [API](#api-reference) · [Benchmarks](#benchmarks) · [FAQ](#faq)
 
 </div>
 
@@ -54,7 +54,7 @@ you can depend on.
 | **Running it** | Write your own training script | `kinema train -c config.yaml` |
 | **Install weight** | Transformers pulled in whether you need it or not | Optional `[text]` extra |
 | **Structure** | One 1,000-line file | Eight focused modules |
-| **Verification** | None | 130 tests, CI on Python 3.9 – 3.13 |
+| **Verification** | None | 136 tests, CI on Python 3.9 – 3.13 |
 | **Warnings** | Accumulate quietly until something breaks | Deprecations fail the build |
 
 <div align="center">
@@ -118,6 +118,77 @@ loss.backward()
 # after a lot of training
 sampled = diffusion.sample(batch_size = 4)
 sampled.shape  # (4, 3, 5, 32, 32)
+```
+
+---
+
+## Running it
+
+Everything below assumes the virtualenv is active. On Windows:
+
+```powershell
+cd D:\Github\kinema
+.venv\Scripts\Activate.ps1
+```
+
+On macOS or Linux, `source .venv/bin/activate`. Without activating, prefix commands with
+`.venv\Scripts\` (or `.venv/bin/`).
+
+### Start training
+
+```bash
+kinema train -c configs/moving-mnist.yaml --log-every 10
+```
+
+Progress prints to the terminal as it goes. Add `--tensorboard` for the dashboard as well.
+
+### Stop training
+
+**Ctrl+C once.** The run checkpoints where it stands and tells you how to continue:
+
+```
+interrupted at step 1430
+saved milestone 5 to ./results
+resume this run with:  --resume
+```
+
+Then pick it back up exactly where it stopped:
+
+```bash
+kinema train -c configs/moving-mnist.yaml --resume
+```
+
+Use **Ctrl+C**, not Ctrl+Break — Ctrl+Break kills the process outright and saves nothing.
+
+### Watch it in a browser
+
+Two terminals. The first trains, the second serves the dashboard:
+
+```bash
+kinema train -c configs/moving-mnist.yaml --tensorboard    # terminal 1
+tensorboard --logdir results/tb                            # terminal 2
+```
+
+Open **http://localhost:6006**. `Ctrl+C` in terminal 2 stops the dashboard; it is only a viewer,
+so stopping it never affects training.
+
+Look at the **IMAGES** tab rather than SCALARS — diffusion loss wanders while quality improves,
+so the samples are the honest signal.
+
+### Generate a video
+
+```bash
+kinema sample results/model-5.pt -c configs/moving-mnist.yaml --ema -o out.mp4
+kinema sample results/model-5.pt -c configs/moving-mnist.yaml --ema --text "fireworks at night"
+```
+
+`.mp4` needs the `video` extra; `.gif` works with no extra dependency.
+
+### Check the install
+
+```bash
+kinema --version
+pytest -q
 ```
 
 ---
@@ -687,7 +758,7 @@ python -m venv .venv && .venv\Scripts\Activate.ps1     # Unix: source .venv/bin/
 pip install -e ".[dev,text]"
 
 ruff check .    # lint
-pytest          # 130 tests; CUDA tests run automatically when a GPU is present
+pytest          # 136 tests; CUDA tests run automatically when a GPU is present
 ```
 
 Runnable examples live in [examples/](examples):

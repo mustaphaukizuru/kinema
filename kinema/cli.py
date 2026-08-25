@@ -5,18 +5,30 @@ the diffusion process and the training loop; every value can be overridden from 
 line with ``--set key.path=value``.
 """
 
-import argparse
-import logging
-import sys
-from pathlib import Path
+import os
 
-import torch
+# The Intel Fortran runtime that ships inside PyTorch's Windows wheels installs its own console
+# handler, and it aborts the process on Ctrl+C before Python ever raises KeyboardInterrupt:
+#
+#     forrtl: error (200): program aborting due to control-C event
+#
+# That loses every step since the last checkpoint. Disabling the handler hands Ctrl+C back to
+# Python, which is what makes the graceful save below possible. It must be set before torch is
+# imported, so it comes first, ahead of every other import.
+os.environ.setdefault('FOR_DISABLE_CONSOLE_CTRL_HANDLER', '1')
 
-from kinema.data import video_tensor_to_gif, video_tensor_to_mp4
-from kinema.diffusion import VideoDiffusion
-from kinema.trainer import Trainer
-from kinema.unet import Unet3D
-from kinema.version import __version__
+import argparse  # noqa: E402
+import logging  # noqa: E402
+import sys  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+import torch  # noqa: E402
+
+from kinema.data import video_tensor_to_gif, video_tensor_to_mp4  # noqa: E402
+from kinema.diffusion import VideoDiffusion  # noqa: E402
+from kinema.trainer import Trainer  # noqa: E402
+from kinema.unet import Unet3D  # noqa: E402
+from kinema.version import __version__  # noqa: E402
 
 logger = logging.getLogger('kinema')
 
@@ -171,6 +183,16 @@ def cmd_train(args):
 
     try:
         trainer.train(log_fn = log_fn)
+    except KeyboardInterrupt:
+        # Ctrl+C during a long run should not throw away the work since the last checkpoint
+        milestone = trainer.save_current()
+
+        print(flush = True)
+        print(f'interrupted at step {trainer.step}', flush = True)
+        print(f'saved milestone {milestone} to {trainer.results_folder}', flush = True)
+        print('resume this run with:  --resume', flush = True)
+
+        return 130   # the conventional exit code for SIGINT
     finally:
         if board is not None:
             board.close()
@@ -203,7 +225,7 @@ def cmd_sample(args):
 
     writer = video_tensor_to_mp4 if out.suffix.lower() == '.mp4' else video_tensor_to_gif
 
-    for i, video in enumerate(videos.cpu()):
+    for i, video in enumerate(videos.cpu()):  # noqa: B007 - i is used below
         path = out if len(videos) == 1 else out.with_name(f'{out.stem}-{i}{out.suffix}')
         writer(video, str(path))
         print(f'wrote {path}', flush = True)

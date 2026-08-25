@@ -218,10 +218,30 @@ class Trainer:
         }
         torch.save(data, str(self.results_folder / f'model-{milestone}.pt'))
 
+    def save_current(self):
+        """
+        Checkpoint wherever the run happens to be, and return the milestone written.
+
+        Used when a run is interrupted. It reuses the milestone numbering rather than inventing
+        a name, so ``load(-1)`` and ``--resume`` pick it up like any other checkpoint.
+        """
+        milestone = self.step // self.save_and_sample_every
+        self.save(milestone)
+        return milestone
+
     def load(self, milestone, **kwargs):
         if milestone == -1:
-            all_milestones = [int(p.stem.split('-')[-1]) for p in Path(self.results_folder).glob('**/*.pt')]
-            assert len(all_milestones) > 0, 'need to have at least one milestone to load from latest checkpoint (milestone == -1)'
+            all_milestones = []
+            for path in Path(self.results_folder).glob('**/*.pt'):
+                try:
+                    all_milestones.append(int(path.stem.split('-')[-1]))
+                except ValueError:
+                    # a checkpoint named by something other than a number is not ours to rank
+                    logger.debug('ignoring unrecognised checkpoint name %s', path.name)
+
+            assert len(all_milestones) > 0, (
+                f'no numbered checkpoints in {self.results_folder} to resume from'
+            )
             milestone = max(all_milestones)
 
         data = torch.load(str(self.results_folder / f'model-{milestone}.pt'), map_location = self.device, weights_only = True)

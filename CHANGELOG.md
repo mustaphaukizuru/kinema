@@ -3,6 +3,42 @@
 All notable changes to Kinema are recorded here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.14.2 — 2026-08-25
+
+Stopping a run is now as reliable as starting one.
+
+### Fixed
+- **Ctrl+C threw away every step since the last checkpoint.** Two separate problems, both fixed:
+
+  1. Nothing caught `KeyboardInterrupt`, so an interrupted run died with a traceback and no save.
+     It now checkpoints where it stands, prints the milestone and how to continue, and exits 130 —
+     the conventional code for SIGINT.
+  2. On Windows it never got that far. The Intel Fortran runtime inside PyTorch's wheels installs
+     its own console handler and aborts the process before Python raises anything:
+
+         forrtl: error (200): program aborting due to control-C event
+
+     `FOR_DISABLE_CONSOLE_CTRL_HANDLER=1` is now set at the top of `kinema.cli`, ahead of the torch
+     import, which hands Ctrl+C back to Python.
+
+- **`load(-1)` crashed on any `.pt` whose name did not end in a number.** One stray file — a
+  `model-best.pt` — made `--resume` raise `ValueError` instead of finding the newest checkpoint.
+  Unrecognised names are skipped, and an empty result gives a message naming the folder.
+
+### Added
+- `Trainer.save_current()`, which checkpoints at the current step and returns the milestone.
+- A **Running it** section in the README: starting, stopping, resuming, the browser dashboard, and
+  generating a video — with the exact commands, for the terminal and the GUI both.
+
+### Verified
+ruff clean, 136 tests passing on CPU and CUDA. The interrupt path is covered end to end: a run is
+interrupted, the checkpoint it writes is reloaded, and training continues from it.
+
+**Note:** the graceful stop is verified by raising `KeyboardInterrupt` inside a real run. Delivering
+a true `CTRL_C_EVENT` to a child process cannot be scripted reliably on Windows without risking the
+parent shell, so the handler is tested rather than the keystroke. Press Ctrl+C in a terminal once to
+confirm it on your own machine — and use Ctrl+C, not Ctrl+Break, which kills the process outright.
+
 ## 0.14.1 — 2026-08-25
 
 Two CI failures, both real. Found by the Ubuntu / CPU / Python 3.9 job, which is a different
