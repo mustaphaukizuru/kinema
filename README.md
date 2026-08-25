@@ -221,6 +221,29 @@ kinema --version
 pytest -q
 ```
 
+### If something goes wrong
+
+**`pip install` fails with `WinError 32 ... kinema.exe`.** Windows locks a running executable, so
+a training run blocks any reinstall of the package. Stop training first, then install. If an
+install was interrupted this way, remove the leftover marker and install again:
+
+```powershell
+Remove-Item -Recurse -Force .venv\Lib\site-packages\~inema-*.dist-info
+pip install -e ".[cli,video,viz,distributed]"
+```
+
+**`Fatal error in launcher: Unable to create process using '...'`.** The `.exe` launchers in a
+virtualenv hardcode an absolute path to `python.exe`, so renaming or moving the project folder
+breaks every script installed before the move. `python -m pip` always works, and regenerates the
+launcher:
+
+```powershell
+python -m pip install --force-reinstall --no-deps pip
+```
+
+**`No matching distribution found for kinema`.** Kinema is not on PyPI yet — install from the
+checkout with `pip install -e .` rather than by name.
+
 ---
 
 ## Command line
