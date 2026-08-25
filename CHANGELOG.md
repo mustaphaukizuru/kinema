@@ -3,6 +3,42 @@
 All notable changes to Kinema are recorded here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.14.0 — 2026-08-24
+
+The two remaining architecture items from the roadmap. Both are off by default, so nothing changes
+for an existing model unless you ask for it.
+
+### Added
+- **Text as attention memory.** `Unet3D(..., num_cond_tokens = 4)` projects the conditioning
+  vector into that many key/value tokens, prepended to the sequence in every attention layer.
+  Previously the caption only ever modulated blocks through the timestep embedding — nothing
+  attended to it.
+
+  ```python
+  unet = Unet3D(dim = 64, dim_mults = (1, 2, 4, 8), use_bert_text_cond = True, num_cond_tokens = 4)
+  ```
+
+  The memory tokens take no positional bias, they remain visible to queries arrested by
+  `prob_focus_present`, and classifier-free guidance nulls the caption on both routes at once, so
+  `cond_scale` keeps its meaning.
+
+- **Token shift along time and space.** `Unet3D(..., token_shift = 'time' | 'space-time')` gives
+  each resnet block cheap local mixing: half the channels are split between the shift directions
+  and displaced one step, the rest pass through. After
+  [CogVideo](https://arxiv.org/abs/2205.15868).
+
+  **It adds no parameters.** A token-shifted model loads a checkpoint from a plain one and the
+  reverse, so it can be switched on mid-project without retraining.
+
+- `shift()` and `token_shift()` in `kinema.modules`, and `token_shift` on `ResnetBlock`.
+
+### Verified
+ruff clean, 128 tests passing on CPU and CUDA. A checkpoint written by 0.11.0 was loaded on this
+code and sampled from, both into a plain model and into a token-shifted one.
+
+### Roadmap
+Every item published in the README roadmap is now done.
+
 ## 0.13.0 — 2026-08-24
 
 Scale out and speed up: multi-GPU training, and `torch.compile` that degrades instead of exploding.

@@ -36,8 +36,19 @@ class Unet3D(nn.Module):
         use_bert_text_cond = False,
         init_dim = None,
         init_kernel_size = 7,
-        use_sparse_linear_attn = True
+        use_sparse_linear_attn = True,
+        num_cond_tokens = 0,
+        token_shift = None
     ):
+        """
+        ``num_cond_tokens`` projects the conditioning vector into that many key/value tokens
+        inside every attention layer, so the caption is something queries attend to rather than
+        only a bias added to the timestep embedding. 0 keeps the original behaviour; 4 to 8 is
+        the useful range.
+
+        ``token_shift`` is ``None``, ``'time'`` or ``'space-time'``: cheap parameter-free mixing
+        along those axes inside each resnet block.
+        """
         super().__init__()
         self.channels = channels
 
@@ -45,8 +56,19 @@ class Unet3D(nn.Module):
 
         rotary_emb = RotaryEmbedding(min(32, attn_dim_head))
 
+        # text conditioning width, needed before the attention layers are built
+
+        self.has_cond = exists(cond_dim) or use_bert_text_cond
+        raw_cond_dim = BERT_MODEL_DIM if use_bert_text_cond else cond_dim
+
+        self.num_cond_tokens = num_cond_tokens if self.has_cond else 0
+        attn_cond_dim = raw_cond_dim if self.num_cond_tokens > 0 else None
+
         def temporal_attn(dim):
-            attn = Attention(dim, heads = attn_heads, dim_head = attn_dim_head, rotary_emb = rotary_emb)
+            attn = Attention(
+                dim, heads = attn_heads, dim_head = attn_dim_head, rotary_emb = rotary_emb,
+                cond_dim = attn_cond_dim, num_cond_tokens = num_cond_tokens
+            )
             return EinopsToAndFrom('b c f h w', 'b (h w) f c', attn)
 
         # realistically will not be able to generate that many frames of video... yet
@@ -79,12 +101,9 @@ class Unet3D(nn.Module):
 
         # text conditioning
 
-        self.has_cond = exists(cond_dim) or use_bert_text_cond
-        cond_dim = BERT_MODEL_DIM if use_bert_text_cond else cond_dim
+        self.null_cond_emb = nn.Parameter(torch.randn(1, raw_cond_dim)) if self.has_cond else None
 
-        self.null_cond_emb = nn.Parameter(torch.randn(1, cond_dim)) if self.has_cond else None
-
-        cond_dim = time_dim + int(cond_dim or 0)
+        cond_dim = time_dim + int(raw_cond_dim or 0)
 
         # layers
 
@@ -95,7 +114,7 @@ class Unet3D(nn.Module):
 
         # block type
 
-        block_klass = ResnetBlock
+        block_klass = partial(ResnetBlock, token_shift = token_shift)
         block_klass_cond = partial(block_klass, time_emb_dim = cond_dim)
 
         # modules for all layers
@@ -115,7 +134,10 @@ class Unet3D(nn.Module):
         mid_dim = dims[-1]
         self.mid_block1 = block_klass_cond(mid_dim, mid_dim)
 
-        spatial_attn = EinopsToAndFrom('b c f h w', 'b f (h w) c', Attention(mid_dim, heads = attn_heads))
+        spatial_attn = EinopsToAndFrom('b c f h w', 'b f (h w) c', Attention(
+            mid_dim, heads = attn_heads, dim_head = attn_dim_head,
+            cond_dim = attn_cond_dim, num_cond_tokens = num_cond_tokens
+        ))
 
         self.mid_spatial_attn = Residual(PreNorm(mid_dim, spatial_attn))
         self.mid_temporal_attn = Residual(PreNorm(mid_dim, temporal_attn(mid_dim)))
@@ -170,7 +192,7 @@ class Unet3D(nn.Module):
 
         x = self.init_conv(x)
 
-        x = self.init_temporal_attn(x, pos_bias = time_rel_pos_bias)
+        x = self.init_temporal_attn(x, pos_bias = time_rel_pos_bias)  # cond is not yet masked here
 
         r = x.clone()
 
@@ -178,11 +200,17 @@ class Unet3D(nn.Module):
 
         # classifier free guidance
 
+        attn_cond = None
+
         if self.has_cond:
             batch, device = x.shape[0], x.device
             mask = prob_mask_like((batch,), null_cond_prob, device = device)
             cond = torch.where(rearrange(mask, 'b -> b 1'), self.null_cond_emb, cond)
             t = torch.cat((t, cond), dim = -1)
+
+            # the same, post-masking, conditioning reaches attention as memory tokens, so
+            # classifier-free guidance drops the caption from both routes at once
+            attn_cond = cond if self.num_cond_tokens > 0 else None
 
         h = []
 
@@ -190,13 +218,19 @@ class Unet3D(nn.Module):
             x = block1(x, t)
             x = block2(x, t)
             x = spatial_attn(x)
-            x = temporal_attn(x, pos_bias = time_rel_pos_bias, focus_present_mask = focus_present_mask)
+            x = temporal_attn(
+                x, pos_bias = time_rel_pos_bias,
+                focus_present_mask = focus_present_mask, cond = attn_cond
+            )
             h.append(x)
             x = downsample(x)
 
         x = self.mid_block1(x, t)
-        x = self.mid_spatial_attn(x)
-        x = self.mid_temporal_attn(x, pos_bias = time_rel_pos_bias, focus_present_mask = focus_present_mask)
+        x = self.mid_spatial_attn(x, cond = attn_cond)
+        x = self.mid_temporal_attn(
+            x, pos_bias = time_rel_pos_bias,
+            focus_present_mask = focus_present_mask, cond = attn_cond
+        )
         x = self.mid_block2(x, t)
 
         for block1, block2, spatial_attn, temporal_attn, upsample in self.ups:
@@ -204,7 +238,10 @@ class Unet3D(nn.Module):
             x = block1(x, t)
             x = block2(x, t)
             x = spatial_attn(x)
-            x = temporal_attn(x, pos_bias = time_rel_pos_bias, focus_present_mask = focus_present_mask)
+            x = temporal_attn(
+                x, pos_bias = time_rel_pos_bias,
+                focus_present_mask = focus_present_mask, cond = attn_cond
+            )
             x = upsample(x)
 
         x = torch.cat((x, r), dim = 1)

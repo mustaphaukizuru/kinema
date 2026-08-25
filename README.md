@@ -13,7 +13,7 @@
 [![CI](https://github.com/mustaphaukizuru/kinema/actions/workflows/ci.yml/badge.svg)](https://github.com/mustaphaukizuru/kinema/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.9%20%E2%80%93%203.13-3776ab)](https://www.python.org)
 [![PyTorch](https://img.shields.io/badge/pytorch-%E2%89%A5%202.0-ee4c2c)](https://pytorch.org)
-[![Tests](https://img.shields.io/badge/tests-99%20passing-2ea44f)](tests)
+[![Tests](https://img.shields.io/badge/tests-128%20passing-2ea44f)](tests)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
 
 [Install](#install) · [Quickstart](#quickstart) · [CLI](#command-line) · [Sampling](#faster-sampling-with-ddim) · [Training](#training) · [API](#api-reference) · [Benchmarks](#benchmarks) · [FAQ](#faq)
@@ -54,7 +54,7 @@ you can depend on.
 | **Running it** | Write your own training script | `kinema train -c config.yaml` |
 | **Install weight** | Transformers pulled in whether you need it or not | Optional `[text]` extra |
 | **Structure** | One 1,000-line file | Eight focused modules |
-| **Verification** | None | 99 tests, CI on Python 3.9 – 3.13 |
+| **Verification** | None | 128 tests, CI on Python 3.9 – 3.13 |
 | **Warnings** | Accumulate quietly until something breaks | Deprecations fail the build |
 
 <div align="center">
@@ -496,6 +496,39 @@ blend = diffusion.interpolate(video_a, video_b, cond = text, cond_scale = 2.)
 
 ---
 
+## Architecture options
+
+Two additions to the paper's design, both off by default.
+
+### Text as attention memory
+
+By default the caption reaches the network as a vector concatenated onto the timestep embedding —
+it modulates every block, but nothing ever *attends* to it. `num_cond_tokens` projects it into
+key/value tokens prepended to every attention layer, so each query can read the caption directly:
+
+```python
+unet = Unet3D(dim = 64, dim_mults = (1, 2, 4, 8), use_bert_text_cond = True, num_cond_tokens = 4)
+```
+
+Four to eight tokens is the useful range. The tokens carry no positional bias, they stay visible to
+queries arrested by `prob_focus_present`, and classifier-free guidance drops the caption from the
+memory tokens and the timestep embedding together — so `cond_scale` keeps meaning what it meant.
+
+### Token shift
+
+Cheap local mixing along time, and optionally height and width: half the channels are split between
+the shift directions and displaced by one step, the rest pass through. After
+[CogVideo](https://arxiv.org/abs/2205.15868).
+
+```python
+unet = Unet3D(dim = 64, dim_mults = (1, 2, 4, 8), token_shift = 'space-time')
+```
+
+**It adds no parameters**, which means a token-shifted model loads a checkpoint from a plain one
+and the reverse — you can switch it on mid-project without retraining from scratch.
+
+---
+
 ## API reference
 
 ### `Unet3D`
@@ -511,6 +544,8 @@ blend = diffusion.interpolate(video_a, video_b, cond = text, cond_scale = 2.)
 | `attn_dim_head` | `32` | Channels per head |
 | `init_kernel_size` | `7` | Spatial kernel of the stem convolution (odd) |
 | `use_sparse_linear_attn` | `True` | Linear spatial attention at each level |
+| `num_cond_tokens` | `0` | Project the caption into this many attention key/value tokens |
+| `token_shift` | `None` | `'time'` or `'space-time'` — parameter-free mixing in each resnet block |
 
 ### `VideoDiffusion`
 
@@ -645,7 +680,7 @@ python -m venv .venv && .venv\Scripts\Activate.ps1     # Unix: source .venv/bin/
 pip install -e ".[dev,text]"
 
 ruff check .    # lint
-pytest          # 99 tests; CUDA tests run automatically when a GPU is present
+pytest          # 128 tests; CUDA tests run automatically when a GPU is present
 ```
 
 Runnable examples live in [examples/](examples):
@@ -667,10 +702,13 @@ welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 - [x] MP4 and frame-folder datasets, not GIF only *(0.10.0)*
 - [x] `kinema train` CLI driven by a YAML config *(0.10.0)*
 - [x] Conditional synthesis from `{video_filename}.txt` sidecar captions *(0.11.0)*
-- [ ] Project text into 4–8 tokens used as memory keys and values in attention
-- [ ] Multi-GPU training via `accelerate`
-- [ ] `torch.compile` support
-- [ ] Token shifts along time and space
+- [x] Project text into 4–8 tokens used as memory keys and values in attention *(0.14.0)*
+- [x] Multi-GPU training via `accelerate` *(0.13.0)*
+- [x] `torch.compile` support *(0.13.0)*
+- [x] Token shifts along time and space *(0.14.0)*
+
+The published roadmap is complete. Next up, in rough order of value: latent diffusion for higher
+resolutions, v-parameterisation, a proper FVD evaluation harness, and pretrained weights.
 
 ---
 
