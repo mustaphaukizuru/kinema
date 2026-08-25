@@ -18,6 +18,7 @@ import os
 os.environ.setdefault('FOR_DISABLE_CONSOLE_CTRL_HANDLER', '1')
 
 import argparse  # noqa: E402
+import inspect  # noqa: E402
 import logging  # noqa: E402
 import sys  # noqa: E402
 from pathlib import Path  # noqa: E402
@@ -28,6 +29,7 @@ from kinema.data import video_tensor_to_gif, video_tensor_to_mp4  # noqa: E402
 from kinema.diffusion import VideoDiffusion  # noqa: E402
 from kinema.trainer import Trainer  # noqa: E402
 from kinema.unet import Unet3D  # noqa: E402
+from kinema.utils import seed_everything  # noqa: E402
 from kinema.version import __version__  # noqa: E402
 
 logger = logging.getLogger('kinema')
@@ -120,6 +122,53 @@ def load_config(path = None, overrides = ()):
     return config
 
 
+def _accepted_keys(fn, skip = 0):
+    """The keyword arguments a callable will accept, minus its leading positional ones."""
+    parameters = list(inspect.signature(fn).parameters.values())[skip:]
+    return {
+        p.name for p in parameters
+        if p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
+    }
+
+
+def validate(config):
+    """
+    Check every config key against the constructor it feeds.
+
+    Without this a typo — `train_lrr` for `train_lr` — travels all the way into `Trainer.__init__`
+    and surfaces as a TypeError with no hint of which line of YAML caused it.
+    """
+    expected = {
+        'data': {'folder'},
+        'model': _accepted_keys(Unet3D.__init__, skip = 1),
+        'diffusion': _accepted_keys(VideoDiffusion.__init__, skip = 2),
+        'trainer': _accepted_keys(Trainer.__init__, skip = 3),
+    }
+
+    problems = []
+
+    for section, values in config.items():
+        if section not in expected:
+            problems.append(f"unknown config section '{section}'; expected {sorted(expected)}")
+            continue
+
+        if not isinstance(values, dict):
+            problems.append(f"section '{section}' should be a mapping, got {type(values).__name__}")
+            continue
+
+        for key in values:
+            if key not in expected[section]:
+                close = sorted(k for k in expected[section] if k.startswith(key[:3]))
+                hint = f'; did you mean {close}?' if close else ''
+                problems.append(f"unknown key '{section}.{key}'{hint}")
+
+    if problems:
+        detail = chr(10).join('  ' + problem for problem in problems)
+        raise SystemExit('config error:' + chr(10) + detail)
+
+    return config
+
+
 def build(config, device):
     """Construct the diffusion model described by a config, on the given device."""
     unet = Unet3D(**config['model'])
@@ -129,6 +178,10 @@ def build(config, device):
     logger.info('model: %.1fM parameters on %s', params / 1e6, device)
 
     return diffusion
+
+
+def exists_arg(args, name):
+    return getattr(args, name, None) is not None
 
 
 def resolve_device(name = None):
@@ -143,7 +196,11 @@ def resolve_device(name = None):
 
 
 def cmd_train(args):
-    config = load_config(args.config, args.set)
+    config = validate(load_config(args.config, args.set))
+
+    if exists_arg(args, 'seed'):
+        seed_everything(args.seed)
+
     device = resolve_device(args.device)
     diffusion = build(config, device)
 
@@ -201,7 +258,11 @@ def cmd_train(args):
 
 
 def cmd_sample(args):
-    config = load_config(args.config, args.set)
+    config = validate(load_config(args.config, args.set))
+
+    if exists_arg(args, 'seed'):
+        seed_everything(args.seed)
+
     device = resolve_device(args.device)
     diffusion = build(config, device)
 
@@ -243,6 +304,7 @@ def main(argv = None):
         p.add_argument('--set', action = 'append', default = [], metavar = 'KEY=VALUE',
                        help = 'override a config value, e.g. --set trainer.train_lr=3e-4')
         p.add_argument('--device', help = 'cuda, cpu or mps (autodetected by default)')
+        p.add_argument('--seed', type = int, help = 'seed torch, for reproducible runs and samples')
         p.add_argument('-v', '--verbose', action = 'store_true', help = 'log per-step detail')
 
     train = sub.add_parser('train', help = 'train a model from a config')

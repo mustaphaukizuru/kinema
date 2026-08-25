@@ -32,6 +32,20 @@ def compile_supported():
 
     return _COMPILE_SUPPORTED
 
+def seed_everything(seed):
+    """
+    Seed torch on every device, and return the seed.
+
+    DDIM at ``eta = 0`` is deterministic given its starting noise, so seeding is what makes a
+    generated video reproducible rather than merely repeatable in shape.
+    """
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+    logger.info('seeded with %d', seed)
+    return seed
+
 def exists(x):
     return x is not None
 

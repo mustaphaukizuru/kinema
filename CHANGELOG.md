@@ -3,6 +3,41 @@
 All notable changes to Kinema are recorded here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.16.0 — 2026-08-25
+
+Everything here is about a long run surviving contact with reality: reproducing it, not filling the
+disk, not losing a checkpoint, and finding out about a typo before the GPU warms up.
+
+### Added
+- **`--seed`** on both `kinema train` and `kinema sample`, and `seed_everything()` in
+  `kinema.utils`. DDIM at `eta = 0` is deterministic, so a seed plus a checkpoint gives
+  byte-identical video — which is what makes a result reproducible rather than merely repeatable.
+- **`Trainer(keep_last_n = N)`** deletes all but the newest N checkpoints. At 170 MB each, written
+  every N steps, a long run would otherwise fill a disk. Unnumbered `.pt` files are left alone.
+- **`Trainer(amp_dtype = 'bfloat16')`.** bfloat16 carries float32's exponent range, so the
+  gradient scaler is switched off automatically; Accelerate is told `bf16` to match.
+- **Config validation.** Every key is checked against the constructor it feeds, before any model
+  is built:
+
+      $ kinema train -c config.yaml --set trainer.train_lrr=3e-4
+      config error:
+        unknown key 'trainer.train_lrr'; did you mean ['train_batch_size', 'train_lr', 'train_num_steps']?
+
+  Previously a typo travelled into `Trainer.__init__` and surfaced as a bare `TypeError`.
+- `Trainer.milestones()` and `Trainer.prune_checkpoints()`, both public.
+
+### Fixed
+- **`save_current()` could overwrite a checkpoint.** Interrupting at step 450 with
+  `save_and_sample_every = 250` wrote over `model-1.pt` from step 250. It now advances to a free
+  milestone, so an interrupted run adds to the record rather than replacing a model that may well
+  have been the better one.
+- Two `Trainer` arguments were documented in the `Unet3D` table in the README.
+
+### Verified
+ruff clean, 172 tests passing on CPU and CUDA. Two new guards keep the release metadata honest: one
+asserts `CITATION.cff` matches `kinema.__version__`, the other that the CHANGELOG has an entry for
+it. The second caught this very release mid-edit.
+
 ## 0.15.0 — 2026-08-25
 
 A real bug in classifier-free guidance, inherited from the upstream implementation, plus DDIM for

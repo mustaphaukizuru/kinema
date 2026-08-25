@@ -47,7 +47,7 @@ def _compile_error_types():
 COMPILE_ERRORS = _compile_error_types()
 
 
-def _build_accelerator(amp):
+def _build_accelerator(amp, amp_dtype = 'float16'):
     try:
         from accelerate import Accelerator
     except ImportError as e:
@@ -55,7 +55,8 @@ def _build_accelerator(amp):
             "multi-GPU training needs Accelerate. install it with: pip install 'kinema[distributed]'"
         ) from e
 
-    return Accelerator(mixed_precision = 'fp16' if amp else 'no')
+    precision = {'float16': 'fp16', 'bfloat16': 'bf16'}[amp_dtype]
+    return Accelerator(mixed_precision = precision if amp else 'no')
 
 class EMA:
     def __init__(self, beta):
@@ -97,7 +98,9 @@ class Trainer:
         device = None,
         captions = 'auto',
         compile = False,
-        accelerate = False
+        accelerate = False,
+        amp_dtype = 'float16',
+        keep_last_n = None
     ):
         """
         ``accelerate = True`` hands device placement, mixed precision and gradient
@@ -110,7 +113,10 @@ class Trainer:
         """
         super().__init__()
 
-        self.accelerator = _build_accelerator(amp) if accelerate else None
+        assert amp_dtype in ('float16', 'bfloat16'), f'amp_dtype must be float16 or bfloat16, got {amp_dtype}'
+        self.amp_dtype = getattr(torch, amp_dtype)
+
+        self.accelerator = _build_accelerator(amp, amp_dtype) if accelerate else None
 
         if exists(self.accelerator):
             if exists(device):
@@ -162,8 +168,10 @@ class Trainer:
         self.step = 0
 
         self.amp = amp
-        self.scaler = GradScaler(self.device.type, enabled = amp)
+        # bfloat16 carries float32's exponent range, so it needs no loss scaling
+        self.scaler = GradScaler(self.device.type, enabled = amp and self.amp_dtype is torch.float16)
         self.max_grad_norm = max_grad_norm
+        self.keep_last_n = keep_last_n
 
         # captions for the periodic samples. a conditioned model cannot sample without cond,
         # and reusing captions from the data keeps successive samples comparable.
@@ -207,6 +215,35 @@ class Trainer:
             return
         self.ema.update_model_average(self.ema_model, self.unwrapped())
 
+    def milestones(self):
+        """Every numbered checkpoint in the results folder, ascending."""
+        found = []
+        for path in Path(self.results_folder).glob('**/*.pt'):
+            try:
+                found.append(int(path.stem.split('-')[-1]))
+            except ValueError:
+                logger.debug('ignoring unrecognised checkpoint name %s', path.name)
+        return sorted(found)
+
+    def prune_checkpoints(self):
+        """Delete all but the newest ``keep_last_n`` checkpoints. A long run fills a disk otherwise."""
+        if not exists(self.keep_last_n):
+            return []
+
+        doomed = self.milestones()[:-self.keep_last_n] if self.keep_last_n > 0 else self.milestones()
+        removed = []
+
+        for milestone in doomed:
+            path = self.results_folder / f'model-{milestone}.pt'
+            if path.exists():
+                path.unlink()
+                removed.append(milestone)
+
+        if removed:
+            logger.info('pruned checkpoints %s, keeping the newest %d', removed, self.keep_last_n)
+
+        return removed
+
     def save(self, milestone):
         data = {
             'step': self.step,
@@ -217,6 +254,7 @@ class Trainer:
             'version': __version__
         }
         torch.save(data, str(self.results_folder / f'model-{milestone}.pt'))
+        self.prune_checkpoints()
 
     def save_current(self):
         """
@@ -226,18 +264,18 @@ class Trainer:
         a name, so ``load(-1)`` and ``--resume`` pick it up like any other checkpoint.
         """
         milestone = self.step // self.save_and_sample_every
+
+        # never overwrite an existing checkpoint: an interrupted run should add to the record,
+        # not replace a milestone that may well be the better model
+        while (self.results_folder / f'model-{milestone}.pt').exists():
+            milestone += 1
+
         self.save(milestone)
         return milestone
 
     def load(self, milestone, **kwargs):
         if milestone == -1:
-            all_milestones = []
-            for path in Path(self.results_folder).glob('**/*.pt'):
-                try:
-                    all_milestones.append(int(path.stem.split('-')[-1]))
-                except ValueError:
-                    # a checkpoint named by something other than a number is not ours to rank
-                    logger.debug('ignoring unrecognised checkpoint name %s', path.name)
+            all_milestones = self.milestones()
 
             assert len(all_milestones) > 0, (
                 f'no numbered checkpoints in {self.results_folder} to resume from'
@@ -275,7 +313,7 @@ class Trainer:
                 # accelerate owns mixed precision when it is driving
                 amp_context = (
                     self.accelerator.autocast() if exists(self.accelerator)
-                    else autocast(self.device.type, enabled = self.amp)
+                    else autocast(self.device.type, dtype = self.amp_dtype, enabled = self.amp)
                 )
 
                 with amp_context:

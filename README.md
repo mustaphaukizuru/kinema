@@ -13,7 +13,7 @@
 [![CI](https://github.com/mustaphaukizuru/kinema/actions/workflows/ci.yml/badge.svg)](https://github.com/mustaphaukizuru/kinema/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.9%20%E2%80%93%203.13-3776ab)](https://www.python.org)
 [![PyTorch](https://img.shields.io/badge/pytorch-%E2%89%A5%202.0-ee4c2c)](https://pytorch.org)
-[![Tests](https://img.shields.io/badge/tests-150%20passing-2ea44f)](tests)
+[![Tests](https://img.shields.io/badge/tests-172%20passing-2ea44f)](tests)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
 
 [Install](#install) · [Running it](#running-it) · [Quickstart](#quickstart) · [CLI](#command-line) · [Sampling](#faster-sampling-with-ddim) · [Training](#training) · [API](#api-reference) · [Benchmarks](#benchmarks) · [FAQ](#faq)
@@ -54,7 +54,7 @@ you can depend on.
 | **Running it** | Write your own training script | `kinema train -c config.yaml` |
 | **Install weight** | Transformers pulled in whether you need it or not | Optional `[text]` extra |
 | **Structure** | One 1,000-line file | Eight focused modules |
-| **Verification** | None | 150 tests, CI on Python 3.9 – 3.13 |
+| **Verification** | None | 172 tests, CI on Python 3.9 – 3.13 |
 | **Warnings** | Accumulate quietly until something breaks | Deprecations fail the build |
 
 <div align="center">
@@ -174,6 +174,15 @@ so stopping it never affects training.
 
 Look at the **IMAGES** tab rather than SCALARS — diffusion loss wanders while quality improves,
 so the samples are the honest signal.
+
+### Reproduce a result
+
+```bash
+kinema train  -c configs/moving-mnist.yaml --seed 42
+kinema sample results/model-5.pt -c configs/moving-mnist.yaml --seed 42 --ema
+```
+
+DDIM at `eta = 0` is deterministic, so the same seed and checkpoint give byte-identical video.
 
 ### Generate a video
 
@@ -665,7 +674,18 @@ and the reverse — you can switch it on mid-project without retraining from scr
 
 Key arguments beyond the training example above: `ema_decay`, `step_start_ema`, `update_ema_every`,
 `save_and_sample_every`, `results_folder`, `num_sample_rows`, `max_grad_norm`, `num_workers`,
-`device`. Methods: `train(prob_focus_present=0., log_fn=noop)`, `save(milestone)`, `load(milestone)`.
+`device`, `captions`, `compile`, `accelerate`.
+
+| Argument | Default | Description |
+|---|---|---|
+| `amp` | `False` | Mixed-precision training |
+| `amp_dtype` | `'float16'` | `'bfloat16'` skips loss scaling and behaves better on modern GPUs |
+| `keep_last_n` | `None` | Delete all but the newest N checkpoints, so a long run cannot fill a disk |
+
+**Methods** — `train(prob_focus_present=0., log_fn=noop)` · `save(milestone)` · `load(milestone)` ·
+`save_current()` checkpoints where the run stands and returns the milestone ·
+`milestones()` lists the numbered checkpoints · `prune_checkpoints()` applies `keep_last_n` ·
+`unwrapped()` reaches past a DistributedDataParallel wrapper.
 
 ### Reading and writing video
 
@@ -771,7 +791,7 @@ python -m venv .venv && .venv\Scripts\Activate.ps1     # Unix: source .venv/bin/
 pip install -e ".[dev,text]"
 
 ruff check .    # lint
-pytest          # 150 tests; CUDA tests run automatically when a GPU is present
+pytest          # 172 tests; CUDA tests run automatically when a GPU is present
 ```
 
 Runnable examples live in [examples/](examples):
