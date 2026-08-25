@@ -131,6 +131,28 @@ class VideoDiffusion(nn.Module):
         )
         self.ddim_sampling_eta = ddim_sampling_eta
 
+    @property
+    def has_cond(self):
+        """Whether the denoiser can use conditioning at all."""
+        # default True for a denoiser that does not declare itself, preserving old behaviour
+        return getattr(self.denoise_fn, 'has_cond', True)
+
+    def resolve_cond(self, cond):
+        """
+        Normalise a conditioning argument, embedding text only when it can actually be used.
+
+        A captioned dataset paired with an unconditional model used to send its captions all the
+        way into ``embed_text``, loading BERT to produce an embedding nothing would read — and
+        failing outright on an install without the ``text`` extra. Ignore it instead.
+        """
+        if not self.has_cond:
+            return None
+
+        if is_list_str(cond):
+            return embed_text(cond, self.betas.device, return_cls_repr = self.text_use_bert_cls)
+
+        return cond
+
     def clip_x_start(self, x_recon):
         """Clamp the predicted x_0 — statically to [-1, 1], or by the Imagen dynamic-thresholding rule."""
         s = 1.
@@ -349,10 +371,7 @@ class VideoDiffusion(nn.Module):
         below ``timesteps`` to take the much faster DDIM path instead. Set ``progress = False``
         to silence the progress bar, which is what you want inside scripts, notebooks and CI.
         """
-        device = next(self.denoise_fn.parameters()).device
-
-        if is_list_str(cond):
-            cond = embed_text(cond, device, return_cls_repr = self.text_use_bert_cls)
+        cond = self.resolve_cond(cond)
 
         batch_size = cond.shape[0] if exists(cond) else batch_size
         image_size = self.image_size
@@ -387,8 +406,7 @@ class VideoDiffusion(nn.Module):
 
         assert x1.shape == x2.shape
 
-        if is_list_str(cond):
-            cond = embed_text(cond, device, return_cls_repr = self.text_use_bert_cls)
+        cond = self.resolve_cond(cond)
 
         x1, x2 = normalize_img(x1), normalize_img(x2)
 
@@ -421,13 +439,11 @@ class VideoDiffusion(nn.Module):
         )
 
     def p_losses(self, x_start, t, cond = None, noise = None, **kwargs):
-        device = x_start.device
         noise = default(noise, lambda: torch.randn_like(x_start))
 
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
 
-        if is_list_str(cond):
-            cond = embed_text(cond, device, return_cls_repr = self.text_use_bert_cls)
+        cond = self.resolve_cond(cond)
 
         # an explicit null_cond_prob from the caller wins; otherwise use the configured rate
         kwargs.setdefault('null_cond_prob', self.cond_drop_prob)

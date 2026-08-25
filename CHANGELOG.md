@@ -3,6 +3,34 @@
 All notable changes to Kinema are recorded here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.19.1 — 2026-08-25
+
+Three bugs found by auditing the seams between modules. All three were silent — none raised
+anything at the point the mistake was made.
+
+### Fixed
+- **A captioned dataset sent its captions to models that cannot use them.** An unconditional model
+  trained on a folder with `.txt` sidecars passed those strings into `embed_text`, loading BERT to
+  build an embedding nothing would read — and failing outright on an install without the `text`
+  extra. Training, evaluation, sampling and interpolation were all affected.
+
+  `VideoDiffusion.has_cond` and `VideoDiffusion.resolve_cond()` now decide once, centrally, whether
+  conditioning can be used at all. `LatentDiffusion` delegates both.
+
+- **`keep_last_n = 0` deleted the checkpoint it had just written.** The pruning slice
+  `milestones()[:-0]` is the whole list, so a save immediately removed itself. Values below 1 are
+  now rejected with a message pointing at `None` for "keep everything".
+
+- **A results folder inside the data folder silently poisoned training.** `Dataset` globs
+  recursively, so the sample GIFs the trainer writes were picked up as training data on the next
+  run and the model began learning from its own output. It now warns when the two overlap.
+
+### Verified
+ruff clean, 246 tests passing on CPU and CUDA, and the whole suite re-run with PyAV blocked to
+cover the Python 3.9 environment. Each fix has a regression test, including one asserting a
+genuinely conditional model still embeds its captions — the guard must not disable conditioning for
+models that want it.
+
 ## 0.19.0 — 2026-08-25
 
 Latent diffusion and distribution-level evaluation. Both are new modules; nothing in the existing

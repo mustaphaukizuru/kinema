@@ -13,7 +13,7 @@
 [![CI](https://github.com/mustaphaukizuru/kinema/actions/workflows/ci.yml/badge.svg)](https://github.com/mustaphaukizuru/kinema/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.9%20%E2%80%93%203.13-3776ab)](https://www.python.org)
 [![PyTorch](https://img.shields.io/badge/pytorch-%E2%89%A5%202.0-ee4c2c)](https://pytorch.org)
-[![Tests](https://img.shields.io/badge/tests-235%20passing-2ea44f)](tests)
+[![Tests](https://img.shields.io/badge/tests-246%20passing-2ea44f)](tests)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
 
 [Install](#install) · [Running it](#running-it) · [Quickstart](#quickstart) · [CLI](#command-line) · [Sampling](#faster-sampling-with-ddim) · [Training](#training) · [API](#api-reference) · [Benchmarks](#benchmarks) · [FAQ](#faq)
@@ -54,7 +54,7 @@ you can depend on.
 | **Running it** | Write your own training script | `kinema train -c config.yaml` |
 | **Install weight** | Transformers pulled in whether you need it or not | Optional `[text]` extra |
 | **Structure** | One 1,000-line file | Eight focused modules |
-| **Verification** | None | 235 tests, CI on Python 3.9 – 3.13 |
+| **Verification** | None | 246 tests, CI on Python 3.9 – 3.13 |
 | **Warnings** | Accumulate quietly until something breaks | Deprecations fail the build |
 
 <div align="center">
@@ -799,7 +799,7 @@ Key arguments beyond the training example above: `ema_decay`, `step_start_ema`, 
 |---|---|---|
 | `amp` | `False` | Mixed-precision training |
 | `amp_dtype` | `'float16'` | `'bfloat16'` skips loss scaling and behaves better on modern GPUs |
-| `keep_last_n` | `None` | Delete all but the newest N checkpoints, so a long run cannot fill a disk |
+| `keep_last_n` | `None` | Delete all but the newest N checkpoints (at least 1), so a long run cannot fill a disk |
 
 **Methods** — `train(prob_focus_present=0., log_fn=noop)` · `save(milestone)` · `load(milestone)` ·
 `save_current()` checkpoints where the run stands and returns the milestone ·
@@ -913,7 +913,7 @@ python -m venv .venv && .venv\Scripts\Activate.ps1     # Unix: source .venv/bin/
 pip install -e ".[dev,text]"
 
 ruff check .    # lint
-pytest          # 235 tests; CUDA tests run automatically when a GPU is present
+pytest          # 246 tests; CUDA tests run automatically when a GPU is present
 ```
 
 Runnable examples live in [examples/](examples):

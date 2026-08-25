@@ -127,6 +127,14 @@ class LatentDiffusion(nn.Module):
     def num_timesteps(self):
         return self.diffusion.num_timesteps
 
+    @property
+    def has_cond(self):
+        """Delegated, so a captioned dataset does not embed text a latent model cannot use."""
+        return self.diffusion.has_cond
+
+    def resolve_cond(self, cond):
+        return self.diffusion.resolve_cond(cond)
+
 
 def fit_latent_scale(autoencoder, videos):
     """

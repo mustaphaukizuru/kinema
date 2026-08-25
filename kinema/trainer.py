@@ -171,6 +171,10 @@ class Trainer:
         # bfloat16 carries float32's exponent range, so it needs no loss scaling
         self.scaler = GradScaler(self.device.type, enabled = amp and self.amp_dtype is torch.float16)
         self.max_grad_norm = max_grad_norm
+
+        assert not exists(keep_last_n) or keep_last_n >= 1, (
+            f'keep_last_n must be at least 1, or None to keep everything; got {keep_last_n}'
+        )
         self.keep_last_n = keep_last_n
 
         # captions for the periodic samples. a conditioned model cannot sample without cond,
@@ -193,6 +197,19 @@ class Trainer:
         self.num_sample_rows = num_sample_rows
         self.results_folder = Path(results_folder)
         self.results_folder.mkdir(exist_ok = True, parents = True)
+
+        # The trainer writes sample GIFs into the results folder, and Dataset globs recursively.
+        # If one sits inside the other, those samples become training data on the next run and
+        # the model quietly starts learning from its own output.
+        try:
+            if self.results_folder.resolve().is_relative_to(Path(folder).resolve()):
+                logger.warning(
+                    'results_folder %s is inside the data folder %s, so generated samples will be '
+                    'picked up as training data. Put results somewhere else.',
+                    self.results_folder, folder
+                )
+        except (OSError, ValueError):
+            logger.debug('could not compare results and data folders')
 
         self.reset_parameters()
 
@@ -230,7 +247,7 @@ class Trainer:
         if not exists(self.keep_last_n):
             return []
 
-        doomed = self.milestones()[:-self.keep_last_n] if self.keep_last_n > 0 else self.milestones()
+        doomed = self.milestones()[:-self.keep_last_n]
         removed = []
 
         for milestone in doomed:
