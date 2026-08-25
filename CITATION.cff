@@ -10,7 +10,7 @@ authors:
 repository-code: "https://github.com/mustaphaukizuru/kinema"
 url: "https://github.com/mustaphaukizuru/kinema"
 license: MIT
-version: 0.12.0
+version: 0.13.0
 date-released: "2026-08-24"
 keywords:
   - diffusion models

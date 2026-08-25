@@ -3,6 +3,45 @@
 All notable changes to Kinema are recorded here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.13.0 — 2026-08-24
+
+Scale out and speed up: multi-GPU training, and `torch.compile` that degrades instead of exploding.
+
+### Added
+- **Multi-GPU via Accelerate.** `Trainer(..., accelerate = True)` or `kinema train --accelerate`:
+
+  ```bash
+  accelerate launch -m kinema.cli train -c config.yaml --accelerate
+  ```
+
+  Accelerate takes device placement, mixed precision and gradient synchronisation. Checkpointing
+  and periodic sampling run on the main process only, and checkpoints are saved unwrapped, so a
+  run trained across GPUs loads into a single-device trainer and back. New `[distributed]` extra.
+
+- `Trainer.unwrapped()` and `Trainer.is_main`, for reaching past a DistributedDataParallel wrapper.
+
+- **`torch.compile` support.** `Trainer(..., compile = True)` or `kinema train --compile`.
+  Compilation is lazy — `torch.compile` returns happily and only fails on the first forward pass,
+  deep inside a training loop — and it needs a toolchain the user may not have (Triton for CUDA, a
+  C++ compiler for CPU). Rather than catch a wide family of backend errors mid-run, `compile_supported()`
+  builds one trivial module up front and caches the answer; an unavailable toolchain logs a warning
+  and trains eagerly. The compiled module shares parameters with the original, so EMA, saving and
+  loading are untouched and checkpoints carry no `_orig_mod.` prefixes.
+
+### Changed
+- `backward()` moved outside the `autocast` region, which is what the `torch.amp` documentation
+  asks for. It was previously called inside it.
+
+### Verified
+ruff clean, 99 tests passing on CPU and CUDA, and `accelerate launch -m kinema.cli train` driven
+end to end.
+
+**Not verified here:** multi-process training. The Windows PyTorch wheels are built without libuv,
+so `torch.distributed`'s `TCPStore` cannot start and both `torchrun` and `accelerate launch` fail
+before reaching kinema. The single-process Accelerate path is covered by tests and a real run; the
+multi-process path is implemented but untested on this machine, and wants a Linux or WSL box with
+more than one GPU to confirm.
+
 ## 0.12.0 — 2026-08-24
 
 You can now watch a run instead of reading numbers off a terminal.

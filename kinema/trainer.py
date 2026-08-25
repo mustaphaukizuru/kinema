@@ -1,4 +1,4 @@
-"""Training loop: EMA, gradient accumulation, checkpointing and sampling."""
+"""Training loop: EMA, gradient accumulation, checkpointing, sampling and multi-GPU."""
 
 import copy
 import logging
@@ -13,10 +13,21 @@ from torch.optim import Adam
 from torch.utils import data
 
 from kinema.data import Dataset, video_tensor_to_gif
-from kinema.utils import cycle, default, exists, noop, num_to_groups
+from kinema.utils import compile_supported, cycle, default, exists, noop, num_to_groups
 from kinema.version import __version__
 
 logger = logging.getLogger(__name__)
+
+
+def _build_accelerator(amp):
+    try:
+        from accelerate import Accelerator
+    except ImportError as e:
+        raise ImportError(
+            "multi-GPU training needs Accelerate. install it with: pip install 'kinema[distributed]'"
+        ) from e
+
+    return Accelerator(mixed_precision = 'fp16' if amp else 'no')
 
 class EMA:
     def __init__(self, beta):
@@ -56,10 +67,30 @@ class Trainer:
         max_grad_norm = None,
         num_workers = 0,
         device = None,
-        captions = 'auto'
+        captions = 'auto',
+        compile = False,
+        accelerate = False
     ):
+        """
+        ``accelerate = True`` hands device placement, mixed precision and gradient
+        synchronisation to Accelerate, which is what makes multi-GPU work:
+
+            accelerate launch -m kinema.cli train -c config.yaml --accelerate
+
+        It also decides the device, so an explicit ``device`` is ignored in that mode. On a
+        single GPU it behaves like the plain path, which is why the same code covers both.
+        """
         super().__init__()
-        self.device = torch.device(default(device, lambda: next(diffusion_model.parameters()).device))
+
+        self.accelerator = _build_accelerator(amp) if accelerate else None
+
+        if exists(self.accelerator):
+            if exists(device):
+                logger.info('accelerate chooses the device, so device = %s is ignored', device)
+            self.device = self.accelerator.device
+        else:
+            self.device = torch.device(default(device, lambda: next(diffusion_model.parameters()).device))
+
         self.model = diffusion_model.to(self.device)
         self.ema = EMA(ema_decay)
         self.ema_model = copy.deepcopy(self.model)
@@ -82,14 +113,23 @@ class Trainer:
         logger.info('found %d clips at %s', len(self.ds), folder)
         assert len(self.ds) > 0, 'need to have at least 1 video to start training (although 1 is not great, try 100k)'
 
-        self.dl = cycle(data.DataLoader(
+        loader = data.DataLoader(
             self.ds,
             batch_size = train_batch_size,
             shuffle = True,
             pin_memory = self.device.type == 'cuda',
             num_workers = num_workers
-        ))
+        )
         self.opt = Adam(diffusion_model.parameters(), lr = train_lr)
+
+        if exists(self.accelerator):
+            self.model, self.opt, loader = self.accelerator.prepare(self.model, self.opt, loader)
+            logger.info(
+                'accelerate: %d process(es), %s',
+                self.accelerator.num_processes, self.accelerator.distributed_type
+            )
+
+        self.dl = cycle(loader)
 
         self.step = 0
 
@@ -104,25 +144,45 @@ class Trainer:
             captions = self.ds.captions
             self.sample_cond = [captions[i % len(captions)] for i in range(num_sample_rows ** 2)]
 
+        # torch.compile wraps the model but shares its parameters, so EMA, saving and loading
+        # all keep working against self.model and checkpoints stay free of _orig_mod prefixes.
+        self.compiled_model = None
+        if compile:
+            if compile_supported():
+                self.compiled_model = torch.compile(self.model)
+                logger.info('torch.compile enabled')
+            else:
+                logger.warning('compile = True but torch.compile cannot build here; training eagerly')
+
         self.num_sample_rows = num_sample_rows
         self.results_folder = Path(results_folder)
         self.results_folder.mkdir(exist_ok = True, parents = True)
 
         self.reset_parameters()
 
+    def unwrapped(self):
+        """The bare model, with any DistributedDataParallel wrapper removed."""
+        if exists(self.accelerator):
+            return self.accelerator.unwrap_model(self.model)
+        return self.model
+
+    @property
+    def is_main(self):
+        return self.accelerator.is_main_process if exists(self.accelerator) else True
+
     def reset_parameters(self):
-        self.ema_model.load_state_dict(self.model.state_dict())
+        self.ema_model.load_state_dict(self.unwrapped().state_dict())
 
     def step_ema(self):
         if self.step < self.step_start_ema:
             self.reset_parameters()
             return
-        self.ema.update_model_average(self.ema_model, self.model)
+        self.ema.update_model_average(self.ema_model, self.unwrapped())
 
     def save(self, milestone):
         data = {
             'step': self.step,
-            'model': self.model.state_dict(),
+            'model': self.unwrapped().state_dict(),
             'ema': self.ema_model.state_dict(),
             'opt': self.opt.state_dict(),
             'scaler': self.scaler.state_dict(),
@@ -139,7 +199,7 @@ class Trainer:
         data = torch.load(str(self.results_folder / f'model-{milestone}.pt'), map_location = self.device, weights_only = True)
 
         self.step = data['step']
-        self.model.load_state_dict(data['model'], **kwargs)
+        self.unwrapped().load_state_dict(data['model'], **kwargs)
         self.ema_model.load_state_dict(data['ema'], **kwargs)
         if 'opt' in data:
             self.opt.load_state_dict(data['opt'])
@@ -161,15 +221,30 @@ class Trainer:
                 data, cond = batch if isinstance(batch, (list, tuple)) else (batch, None)
                 data = data.to(self.device)
 
-                with autocast(self.device.type, enabled = self.amp):
-                    loss = self.model(
+                # not default(): it calls a callable fallback, and an nn.Module is callable
+                forward = self.compiled_model if exists(self.compiled_model) else self.model
+
+                # accelerate owns mixed precision when it is driving
+                amp_context = (
+                    self.accelerator.autocast() if exists(self.accelerator)
+                    else autocast(self.device.type, enabled = self.amp)
+                )
+
+                with amp_context:
+                    loss = forward(
                         data,
                         cond = cond,
                         prob_focus_present = prob_focus_present,
                         focus_present_mask = focus_present_mask
                     )
 
-                    self.scaler.scale(loss / self.gradient_accumulate_every).backward()
+                # backward belongs outside the autocast region, per the torch.amp docs
+                scaled = loss / self.gradient_accumulate_every
+
+                if exists(self.accelerator):
+                    self.accelerator.backward(scaled)
+                else:
+                    self.scaler.scale(scaled).backward()
 
                 # per-step loss is debug detail; log_fn is the supported reporting hook
                 logger.debug('%d: %.6f', self.step, loss.item())
@@ -177,17 +252,24 @@ class Trainer:
             log = {'step': self.step, 'loss': loss.item()}
 
             if exists(self.max_grad_norm):
-                self.scaler.unscale_(self.opt)
-                nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+                if exists(self.accelerator):
+                    self.accelerator.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+                else:
+                    self.scaler.unscale_(self.opt)
+                    nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
 
-            self.scaler.step(self.opt)
-            self.scaler.update()
+            if exists(self.accelerator):
+                self.opt.step()
+            else:
+                self.scaler.step(self.opt)
+                self.scaler.update()
+
             self.opt.zero_grad()
 
             if self.step % self.update_ema_every == 0:
                 self.step_ema()
 
-            if self.step != 0 and self.step % self.save_and_sample_every == 0:
+            if self.is_main and self.step != 0 and self.step % self.save_and_sample_every == 0:
                 milestone = self.step // self.save_and_sample_every
                 num_samples = self.num_sample_rows ** 2
                 batches = num_to_groups(num_samples, self.batch_size)
@@ -212,5 +294,8 @@ class Trainer:
 
             log_fn(log)
             self.step += 1
+
+        if exists(self.accelerator):
+            self.accelerator.wait_for_everyone()
 
         logger.info('training completed')

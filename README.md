@@ -13,7 +13,7 @@
 [![CI](https://github.com/mustaphaukizuru/kinema/actions/workflows/ci.yml/badge.svg)](https://github.com/mustaphaukizuru/kinema/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.9%20%E2%80%93%203.13-3776ab)](https://www.python.org)
 [![PyTorch](https://img.shields.io/badge/pytorch-%E2%89%A5%202.0-ee4c2c)](https://pytorch.org)
-[![Tests](https://img.shields.io/badge/tests-80%20passing-2ea44f)](tests)
+[![Tests](https://img.shields.io/badge/tests-99%20passing-2ea44f)](tests)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
 
 [Install](#install) · [Quickstart](#quickstart) · [CLI](#command-line) · [Sampling](#faster-sampling-with-ddim) · [Training](#training) · [API](#api-reference) · [Benchmarks](#benchmarks) · [FAQ](#faq)
@@ -54,7 +54,7 @@ you can depend on.
 | **Running it** | Write your own training script | `kinema train -c config.yaml` |
 | **Install weight** | Transformers pulled in whether you need it or not | Optional `[text]` extra |
 | **Structure** | One 1,000-line file | Eight focused modules |
-| **Verification** | None | 80 tests, CI on Python 3.9 – 3.13 |
+| **Verification** | None | 99 tests, CI on Python 3.9 – 3.13 |
 | **Warnings** | Accumulate quietly until something breaks | Deprecations fail the build |
 
 <div align="center">
@@ -72,7 +72,8 @@ pip install "kinema[text]"             # + BERT text conditioning
 pip install "kinema[video]"            # + MP4 / WebM / MOV decoding
 pip install "kinema[cli]"              # + the kinema command and YAML configs
 pip install "kinema[viz]"              # + TensorBoard monitoring
-pip install "kinema[text,video,cli,viz]"   # everything
+pip install "kinema[distributed]"      # + multi-GPU via Accelerate
+pip install "kinema[text,video,cli,viz,distributed]"   # everything
 ```
 
 Python ≥ 3.9, PyTorch ≥ 2.0. Runs on CPU, CUDA and MPS.
@@ -383,6 +384,40 @@ extra for BERT.
 A partially captioned folder is the case worth knowing about: under `'auto'` it trains
 unconditionally rather than silently conditioning on blanks, and says so in the log.
 
+### Multi-GPU
+
+Pass `--accelerate` and launch through [Accelerate](https://huggingface.co/docs/accelerate):
+
+```bash
+pip install "kinema[distributed]"
+accelerate launch -m kinema.cli train -c configs/moving-mnist.yaml --accelerate
+```
+
+Accelerate then owns device placement, mixed precision and gradient synchronisation, so the same
+code runs on one GPU or eight. Checkpointing and periodic sampling happen on the main process only,
+and checkpoints are written unwrapped — a run trained on eight GPUs loads into a single-GPU trainer
+and back again.
+
+Two things worth knowing:
+
+- Accelerate keeps its state in a **process-wide singleton**, so the first `Trainer` built in a
+  process fixes mixed precision for every one after it.
+- On Windows, `torch.distributed` needs a PyTorch build with libuv; the standard Windows wheels
+  ship without it, and multi-process launching fails inside `TCPStore` before kinema is reached.
+  Use WSL or Linux for multi-GPU. Single-process Accelerate works fine on Windows.
+
+### Compiling the model
+
+```bash
+kinema train -c configs/moving-mnist.yaml --compile
+```
+
+`torch.compile` needs a toolchain that is not always present — Triton for the CUDA backend, a C++
+compiler for the CPU one — and it fails lazily, on the first forward pass deep inside training.
+Kinema probes it once at startup instead, and falls back to eager execution with a warning rather
+than dying twenty minutes into a run. Compilation wraps the model but shares its parameters, so
+EMA, saving and loading are unaffected and checkpoints carry no `_orig_mod.` prefixes.
+
 ### Choosing a device
 
 ```python
@@ -610,7 +645,7 @@ python -m venv .venv && .venv\Scripts\Activate.ps1     # Unix: source .venv/bin/
 pip install -e ".[dev,text]"
 
 ruff check .    # lint
-pytest          # 80 tests; CUDA tests run automatically when a GPU is present
+pytest          # 99 tests; CUDA tests run automatically when a GPU is present
 ```
 
 Runnable examples live in [examples/](examples):

@@ -135,7 +135,15 @@ def cmd_train(args):
     device = resolve_device(args.device)
     diffusion = build(config, device)
 
-    trainer = Trainer(diffusion, config['data']['folder'], device = device, **config['trainer'])
+    # explicit flags win over the config file
+    for flag in ('compile', 'accelerate'):
+        if getattr(args, flag):
+            config['trainer'][flag] = True
+
+    # accelerate picks its own device, so do not force one on it
+    device_arg = None if config['trainer'].get('accelerate') else device
+
+    trainer = Trainer(diffusion, config['data']['folder'], device = device_arg, **config['trainer'])
 
     if args.resume is not None:
         trainer.load(args.resume)
@@ -222,6 +230,10 @@ def main(argv = None):
     train.add_argument('--log-every', type = int, default = 10, help = 'print a line every N steps')
     train.add_argument('--tensorboard', nargs = '?', const = True, metavar = 'LOGDIR',
                        help = 'log scalars and sample clips to TensorBoard (default: <results_folder>/tb)')
+    train.add_argument('--compile', action = 'store_true',
+                       help = 'compile the model with torch.compile when the toolchain allows it')
+    train.add_argument('--accelerate', action = 'store_true',
+                       help = 'train through Accelerate; required for multi-GPU via `accelerate launch`')
     train.set_defaults(func = cmd_train)
 
     sample = sub.add_parser('sample', help = 'generate videos from a checkpoint')

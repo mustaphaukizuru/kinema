@@ -49,8 +49,12 @@ dependencies = [
 text = ["transformers>=4.30", "sentencepiece", "sacremoses"]
 video = ["av>=10"]
 viz = ["tensorboard>=2.10"]
+distributed = ["accelerate>=0.26"]
 cli = ["pyyaml>=6"]
-dev = ["pytest>=7", "ruff>=0.4", "build>=1.0", "pyyaml>=6", "tensorboard>=2.10", "av>=10; python_version >= '3.10'"]
+dev = [
+    "pytest>=7", "ruff>=0.4", "build>=1.0", "pyyaml>=6", "tensorboard>=2.10",
+    "accelerate>=0.26", "av>=10; python_version >= '3.10'",
+]
 
 [project.scripts]
 kinema = "kinema.cli:main"
