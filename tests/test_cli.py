@@ -68,12 +68,12 @@ def test_resolve_device_honours_an_explicit_name():
 
 
 def test_train_then_sample_end_to_end(tmp_path, capsys):
-    from kinema.data import video_tensor_to_mp4
+    from kinema.data import video_tensor_to_gif
 
     clips = tmp_path / 'clips'
     clips.mkdir()
     for i in range(2):
-        video_tensor_to_mp4(torch.rand(3, 2, 16, 16), str(clips / f'{i}.mp4'))
+        video_tensor_to_gif(torch.rand(3, 2, 16, 16), str(clips / f'{i}.gif'))
 
     results = tmp_path / 'results'
     config = write_config(tmp_path)
@@ -103,12 +103,12 @@ def test_train_then_sample_end_to_end(tmp_path, capsys):
 
 
 def test_sample_writes_one_file_per_video(tmp_path):
-    from kinema.data import video_tensor_to_mp4
+    from kinema.data import video_tensor_to_gif
     from kinema.trainer import Trainer
 
     clips = tmp_path / 'clips'
     clips.mkdir()
-    video_tensor_to_mp4(torch.rand(3, 2, 16, 16), str(clips / '0.mp4'))
+    video_tensor_to_gif(torch.rand(3, 2, 16, 16), str(clips / '0.gif'))
 
     config = write_config(tmp_path)
     diffusion = build(load_config(config), torch.device('cpu'))

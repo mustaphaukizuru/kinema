@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 from kinema import Trainer, Unet3D, VideoDiffusion, video_tensor_to_gif
@@ -79,3 +80,48 @@ def test_compiled_model_shares_parameters_with_the_original(tmp_path):
     original = next(trainer.model.parameters())
     compiled = next(trainer.compiled_model.parameters())
     assert original is compiled
+
+
+def test_falls_back_when_the_compiled_model_raises(tmp_path, caplog):
+    """
+    Regression: on CI the toolchain probe passes but Inductor still fails on this model
+    (`cannot determine truth value of Relational`). A run must survive that, not die on the
+    first step.
+    """
+    from kinema.trainer import COMPILE_ERRORS
+
+    if not COMPILE_ERRORS:
+        return  # no backend exception types to simulate on this torch build
+
+    trainer = make_trainer(tmp_path)
+
+    class ExplodingCompiled:
+        calls = 0
+
+        def __call__(self, *args, **kwargs):
+            ExplodingCompiled.calls += 1
+            raise COMPILE_ERRORS[0]('simulated backend failure')
+
+    trainer.compiled_model = ExplodingCompiled()
+
+    with caplog.at_level('WARNING'):
+        trainer.train()
+
+    assert ExplodingCompiled.calls == 1, 'it should stop retrying the compiled path'
+    assert trainer.compiled_model is None
+    assert 'falling back to eager' in caplog.text
+    assert trainer.step == 2
+
+
+def test_a_genuine_model_error_is_not_swallowed(tmp_path):
+    """The fallback must not hide real bugs — only backend failures."""
+    trainer = make_trainer(tmp_path)
+
+    class Broken:
+        def __call__(self, *args, **kwargs):
+            raise ValueError('a real bug in the model')
+
+    trainer.compiled_model = Broken()
+
+    with pytest.raises(ValueError, match = 'a real bug'):
+        trainer.train()

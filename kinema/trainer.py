@@ -19,6 +19,34 @@ from kinema.version import __version__
 logger = logging.getLogger(__name__)
 
 
+def _compile_error_types():
+    """
+    The exceptions a compile backend raises, so a fallback can be narrow.
+
+    Catching bare Exception around a training step would swallow genuine model errors. These are
+    the two families a failing backend actually throws, looked up defensively because they live
+    in private modules.
+    """
+    types = []
+
+    try:
+        from torch._dynamo.exc import TorchDynamoException
+        types.append(TorchDynamoException)
+    except ImportError:
+        pass
+
+    try:
+        from torch._inductor.exc import InductorError
+        types.append(InductorError)
+    except ImportError:
+        pass
+
+    return tuple(types)
+
+
+COMPILE_ERRORS = _compile_error_types()
+
+
 def _build_accelerator(amp):
     try:
         from accelerate import Accelerator
@@ -231,12 +259,25 @@ class Trainer:
                 )
 
                 with amp_context:
-                    loss = forward(
-                        data,
+                    kwargs = dict(
                         cond = cond,
                         prob_focus_present = prob_focus_present,
                         focus_present_mask = focus_present_mask
                     )
+
+                    try:
+                        loss = forward(data, **kwargs)
+                    except COMPILE_ERRORS:
+                        # the toolchain probe only proves a backend can build *something*.
+                        # this model may still defeat it, and that surfaces here, on the first
+                        # compiled forward. drop to eager rather than end the run.
+                        if forward is self.model:
+                            raise
+
+                        logger.warning('torch.compile failed on this model; falling back to eager')
+                        self.compiled_model = None
+                        forward = self.model
+                        loss = forward(data, **kwargs)
 
                 # backward belongs outside the autocast region, per the torch.amp docs
                 scaled = loss / self.gradient_accumulate_every

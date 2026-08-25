@@ -3,6 +3,32 @@
 All notable changes to Kinema are recorded here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.14.1 — 2026-08-25
+
+Two CI failures, both real. Found by the Ubuntu / CPU / Python 3.9 job, which is a different
+machine from the one the previous releases were developed on.
+
+### Fixed
+- **`torch.compile` could still kill a run.** 0.13.0 probed the toolchain at startup so a missing
+  Triton or C++ compiler would not surface mid-training — but the probe compiles a trivial module,
+  which proves only that a backend can build *something*. On CI the toolchain is present and
+  Inductor still fails on this U-Net's dynamic shapes:
+
+      InductorError: TypeError: cannot determine truth value of Relational: 16*s0*s92 < 16
+
+  The first compiled forward pass now catches that and drops to eager for the rest of the run.
+  The fallback is narrow — only `TorchDynamoException` and `InductorError` — so genuine bugs in a
+  model still raise rather than being silently swallowed, and there is a test for each direction.
+
+- **Two CLI tests required PyAV.** They wrote MP4 fixtures without the `importorskip` guard that
+  the data tests carry, so they failed on Python 3.9, where PyAV publishes no wheels and 0.13.0
+  had correctly excluded it. The fixtures are GIFs now: those tests exercise the CLI, not the
+  container format, and Python 3.9 keeps its CLI coverage.
+
+### Verified
+ruff clean, 130 tests passing on CPU and CUDA, and the whole suite re-run with PyAV blocked to
+reproduce the Python 3.9 environment locally rather than guessing at it.
+
 ## 0.14.0 — 2026-08-24
 
 The two remaining architecture items from the roadmap. Both are off by default, so nothing changes

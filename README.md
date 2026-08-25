@@ -13,7 +13,7 @@
 [![CI](https://github.com/mustaphaukizuru/kinema/actions/workflows/ci.yml/badge.svg)](https://github.com/mustaphaukizuru/kinema/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.9%20%E2%80%93%203.13-3776ab)](https://www.python.org)
 [![PyTorch](https://img.shields.io/badge/pytorch-%E2%89%A5%202.0-ee4c2c)](https://pytorch.org)
-[![Tests](https://img.shields.io/badge/tests-128%20passing-2ea44f)](tests)
+[![Tests](https://img.shields.io/badge/tests-130%20passing-2ea44f)](tests)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
 
 [Install](#install) · [Quickstart](#quickstart) · [CLI](#command-line) · [Sampling](#faster-sampling-with-ddim) · [Training](#training) · [API](#api-reference) · [Benchmarks](#benchmarks) · [FAQ](#faq)
@@ -54,7 +54,7 @@ you can depend on.
 | **Running it** | Write your own training script | `kinema train -c config.yaml` |
 | **Install weight** | Transformers pulled in whether you need it or not | Optional `[text]` extra |
 | **Structure** | One 1,000-line file | Eight focused modules |
-| **Verification** | None | 128 tests, CI on Python 3.9 – 3.13 |
+| **Verification** | None | 130 tests, CI on Python 3.9 – 3.13 |
 | **Warnings** | Accumulate quietly until something breaks | Deprecations fail the build |
 
 <div align="center">
@@ -412,11 +412,18 @@ Two things worth knowing:
 kinema train -c configs/moving-mnist.yaml --compile
 ```
 
-`torch.compile` needs a toolchain that is not always present — Triton for the CUDA backend, a C++
-compiler for the CPU one — and it fails lazily, on the first forward pass deep inside training.
-Kinema probes it once at startup instead, and falls back to eager execution with a warning rather
-than dying twenty minutes into a run. Compilation wraps the model but shares its parameters, so
-EMA, saving and loading are unaffected and checkpoints carry no `_orig_mod.` prefixes.
+`torch.compile` fails in two different ways, and kinema handles both rather than ending your run:
+
+- **The toolchain is missing** — Triton for the CUDA backend, a C++ compiler for the CPU one.
+  Probed once at startup, before training begins.
+- **The toolchain works but this model defeats the backend.** Inductor can raise on the U-Net's
+  dynamic shapes even where compilation is otherwise fine. That only surfaces on the first
+  compiled forward pass, so it is caught there and the run continues eagerly.
+
+Either way you get a warning and eager execution, never a dead run. The fallback catches only
+Dynamo and Inductor exceptions, so genuine bugs in your model still raise. Compilation wraps the
+model but shares its parameters, so EMA, saving and loading are unaffected and checkpoints carry
+no `_orig_mod.` prefixes.
 
 ### Choosing a device
 
@@ -680,7 +687,7 @@ python -m venv .venv && .venv\Scripts\Activate.ps1     # Unix: source .venv/bin/
 pip install -e ".[dev,text]"
 
 ruff check .    # lint
-pytest          # 128 tests; CUDA tests run automatically when a GPU is present
+pytest          # 130 tests; CUDA tests run automatically when a GPU is present
 ```
 
 Runnable examples live in [examples/](examples):
