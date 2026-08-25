@@ -3,6 +3,36 @@
 All notable changes to Kinema are recorded here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.15.0 — 2026-08-25
+
+A real bug in classifier-free guidance, inherited from the upstream implementation, plus DDIM for
+interpolation.
+
+### Fixed
+- **Classifier-free guidance never trained its unconditional branch.** `p_losses` called the U-Net
+  without `null_cond_prob`, so it defaulted to `0`, the dropout mask was always empty, and
+  `null_cond_emb` kept the random initialisation it was born with. At sampling time
+  `forward_with_cond_scale` asks that same embedding for the unconditional prediction — so
+  `cond_scale` was extrapolating away from noise rather than from anything the model had learned.
+
+  Training now drops the caption with probability `cond_drop_prob` (0.1 by default), which is what
+  the README already claimed was happening. An explicit `null_cond_prob` from the caller still
+  wins, and unconditional models are untouched.
+
+  It adds no parameters, so existing checkpoints load either way — but a model trained before this
+  release has an untrained null embedding and wants retraining before `cond_scale` means anything.
+
+### Added
+- **`interpolate()` takes `sampling_timesteps` and `eta`**, exactly as `sample()` does. It walked
+  every step from `t` down to zero regardless of the DDIM settings on the model.
+- `VideoDiffusion.ddim_loop()`, the strided reverse walk that `ddim_sample()` and `interpolate()`
+  now share rather than each keeping their own copy.
+
+### Verified
+ruff clean, 150 tests passing on CPU and CUDA. The guidance fix is pinned by tests asserting the
+null embedding receives gradient at the default drop rate and does not at zero — so the bug cannot
+come back silently.
+
 ## 0.14.2 — 2026-08-25
 
 Stopping a run is now as reliable as starting one.

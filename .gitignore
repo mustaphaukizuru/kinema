@@ -131,3 +131,5 @@ dmypy.json
 # training outputs / local env
 results/
 .venv/
+Kinema-IPN-presentation.pptx
+

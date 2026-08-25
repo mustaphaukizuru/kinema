@@ -46,6 +46,7 @@ class VideoDiffusion(nn.Module):
         timesteps = 1000,
         sampling_timesteps = None,
         ddim_sampling_eta = 0.,
+        cond_drop_prob = 0.1,
         loss_type = 'l1',
         use_dynamic_thres = False, # from the Imagen paper
         dynamic_thres_percentile = 0.9
@@ -100,6 +101,12 @@ class VideoDiffusion(nn.Module):
         # text conditioning parameters
 
         self.text_use_bert_cls = text_use_bert_cls
+
+        # Classifier-free guidance only works if the *unconditional* branch is trained. During
+        # training the caption is dropped this often, which is what teaches `null_cond_emb` to
+        # mean "no caption". Left at 0, that embedding keeps its random initialisation and
+        # `cond_scale` extrapolates away from noise rather than from a learned prior.
+        self.cond_drop_prob = cond_drop_prob
 
         # dynamic thresholding when sampling
 
@@ -216,7 +223,6 @@ class VideoDiffusion(nn.Module):
         stochastic DDPM update.
         """
         device = self.betas.device
-        b = shape[0]
 
         steps = default(sampling_timesteps, self.sampling_timesteps)
         eta = default(eta, self.ddim_sampling_eta)
@@ -227,12 +233,40 @@ class VideoDiffusion(nn.Module):
         # a strided subsequence of [0, num_timesteps), walked in reverse, paired with its successor.
         # the final pair steps to -1, which denotes x_0 itself.
 
-        times = torch.linspace(-1, self.num_timesteps - 1, steps = steps + 1).flip(0).long().tolist()
-        time_pairs = list(zip(times[:-1], times[1:]))
-
         img = torch.randn(shape, device = device)
 
-        for time, time_next in tqdm(time_pairs, desc = 'ddim sampling time step', disable = not progress):
+        return self.ddim_loop(
+            img, self.num_timesteps, steps,
+            cond = cond, cond_scale = cond_scale, eta = eta,
+            clip_denoised = clip_denoised, progress = progress
+        )
+
+    @torch.inference_mode()
+    def ddim_loop(
+        self,
+        img,
+        from_step,
+        steps,
+        cond = None,
+        cond_scale = 1.,
+        eta = 0.,
+        clip_denoised = True,
+        progress = True,
+        desc = 'ddim sampling time step'
+    ):
+        """
+        Walk a strided subsequence of ``[0, from_step)`` in reverse, denoising ``img`` as it goes.
+
+        Shared by :meth:`ddim_sample` and :meth:`interpolate`, which differ only in where the
+        starting image comes from and how far up the chain they begin.
+        """
+        device = img.device
+        b = img.shape[0]
+
+        times = torch.linspace(-1, from_step - 1, steps = steps + 1).flip(0).long().tolist()
+        time_pairs = list(zip(times[:-1], times[1:]))
+
+        for time, time_next in tqdm(time_pairs, desc = desc, disable = not progress):
             t = torch.full((b,), time, device = device, dtype = torch.long)
 
             pred_noise = self.denoise_fn.forward_with_cond_scale(img, t, cond = cond, cond_scale = cond_scale)
@@ -299,8 +333,17 @@ class VideoDiffusion(nn.Module):
         return self.p_sample_loop(shape, cond = cond, cond_scale = cond_scale, progress = progress)
 
     @torch.inference_mode()
-    def interpolate(self, x1, x2, t = None, lam = 0.5, cond = None, cond_scale = 1., progress = True):
-        """Interpolate between two videos (values in [0, 1]) by noising both to step ``t`` and denoising the mix."""
+    def interpolate(
+        self, x1, x2, t = None, lam = 0.5, cond = None, cond_scale = 1.,
+        sampling_timesteps = None, eta = None, progress = True
+    ):
+        """
+        Interpolate between two videos (values in [0, 1]) by noising both to step ``t`` and
+        denoising the mix.
+
+        Takes ``sampling_timesteps`` and ``eta`` exactly as :meth:`sample` does, so a blend can
+        use the DDIM path instead of walking every step from ``t`` down to zero.
+        """
         b, *_, device = *x1.shape, x1.device
         t = default(t, self.num_timesteps - 1)
 
@@ -315,6 +358,17 @@ class VideoDiffusion(nn.Module):
         xt1, xt2 = map(lambda x: self.q_sample(x, t=t_batched), (x1, x2))
 
         img = (1 - lam) * xt1 + lam * xt2
+
+        steps = default(sampling_timesteps, min(self.sampling_timesteps, t))
+
+        if steps < t:
+            return self.ddim_loop(
+                img, t, steps,
+                cond = cond, cond_scale = cond_scale,
+                eta = default(eta, self.ddim_sampling_eta),
+                progress = progress, desc = 'ddim interpolation time step'
+            )
+
         for i in tqdm(reversed(range(0, t)), desc='interpolation sample time step', total=t, disable = not progress):
             img = self.p_sample(img, torch.full((b,), i, device=device, dtype=torch.long), cond = cond, cond_scale = cond_scale)
 
@@ -336,6 +390,9 @@ class VideoDiffusion(nn.Module):
 
         if is_list_str(cond):
             cond = embed_text(cond, device, return_cls_repr = self.text_use_bert_cls)
+
+        # an explicit null_cond_prob from the caller wins; otherwise use the configured rate
+        kwargs.setdefault('null_cond_prob', self.cond_drop_prob)
 
         x_recon = self.denoise_fn(x_noisy, t, cond = cond, **kwargs)
 

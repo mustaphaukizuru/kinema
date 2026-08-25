@@ -13,7 +13,7 @@
 [![CI](https://github.com/mustaphaukizuru/kinema/actions/workflows/ci.yml/badge.svg)](https://github.com/mustaphaukizuru/kinema/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.9%20%E2%80%93%203.13-3776ab)](https://www.python.org)
 [![PyTorch](https://img.shields.io/badge/pytorch-%E2%89%A5%202.0-ee4c2c)](https://pytorch.org)
-[![Tests](https://img.shields.io/badge/tests-136%20passing-2ea44f)](tests)
+[![Tests](https://img.shields.io/badge/tests-150%20passing-2ea44f)](tests)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
 
 [Install](#install) · [Running it](#running-it) · [Quickstart](#quickstart) · [CLI](#command-line) · [Sampling](#faster-sampling-with-ddim) · [Training](#training) · [API](#api-reference) · [Benchmarks](#benchmarks) · [FAQ](#faq)
@@ -54,7 +54,7 @@ you can depend on.
 | **Running it** | Write your own training script | `kinema train -c config.yaml` |
 | **Install weight** | Transformers pulled in whether you need it or not | Optional `[text]` extra |
 | **Structure** | One 1,000-line file | Eight focused modules |
-| **Verification** | None | 136 tests, CI on Python 3.9 – 3.13 |
+| **Verification** | None | 150 tests, CI on Python 3.9 – 3.13 |
 | **Warnings** | Accumulate quietly until something breaks | Deprecations fail the build |
 
 <div align="center">
@@ -325,14 +325,25 @@ sampled = diffusion.sample(cond = text, cond_scale = 2.)
 
 ### Classifier-free guidance
 
-During training, captions are randomly dropped and replaced by a learned null embedding. At sampling
-time, `cond_scale` sets how far to push generation away from the unconditional prediction:
+During training, captions are randomly dropped and replaced by a learned null embedding — that
+dropout is what teaches the model what "no caption" means. At sampling time, `cond_scale` sets how
+far to push generation away from that unconditional prediction:
 
 | `cond_scale` | Effect |
 |---|---|
 | `1.` | No guidance — the raw conditional prediction |
 | `2.` | Balanced; a sensible default |
 | `5.`+ | Strong adherence to the prompt, at the cost of diversity and saturation |
+
+The drop rate is `cond_drop_prob`, 10% by default:
+
+```python
+diffusion = VideoDiffusion(unet, image_size = 64, num_frames = 10, cond_drop_prob = 0.1)
+```
+
+Setting it to `0.` disables the dropout and leaves the null embedding at its random
+initialisation, which makes `cond_scale` extrapolate away from noise rather than from anything
+learned. There is rarely a reason to do that.
 
 Aggressive guidance can push samples out of range. `use_dynamic_thres = True` on `VideoDiffusion`
 enables the percentile-based thresholding from the Imagen paper, which pulls them back:
@@ -635,6 +646,7 @@ and the reverse — you can switch it on mid-project without retraining from scr
 | `timesteps` | `1000` | Diffusion steps used in training |
 | `sampling_timesteps` | `= timesteps` | Fewer than `timesteps` switches `sample()` to DDIM |
 | `ddim_sampling_eta` | `0.` | DDIM noise; `0.` is deterministic, `1.` recovers DDPM |
+| `cond_drop_prob` | `0.1` | How often the caption is dropped in training, for guidance |
 | `loss_type` | `'l1'` | `'l1'` or `'l2'` |
 | `use_dynamic_thres` | `False` | Percentile thresholding when sampling |
 | `dynamic_thres_percentile` | `0.9` | Percentile used when enabled |
@@ -646,7 +658,8 @@ and the reverse — you can switch it on mid-project without retraining from scr
 | `forward(videos, cond=None, prob_focus_present=0.)` | Returns the training loss |
 | `sample(cond=None, cond_scale=1., batch_size=16, sampling_timesteps=None, eta=None, progress=True)` | Generates video, DDPM or DDIM |
 | `ddim_sample(shape, ...)` | The DDIM loop directly, if you want to drive it yourself |
-| `interpolate(x1, x2, t=None, lam=0.5, cond=None, cond_scale=1., progress=True)` | Blends two clips |
+| `interpolate(x1, x2, t=None, lam=0.5, cond=None, cond_scale=1., sampling_timesteps=None, eta=None, progress=True)` | Blends two clips, DDPM or DDIM |
+| `ddim_loop(img, from_step, steps, ...)` | The strided reverse walk both samplers share |
 
 ### `Trainer`
 
@@ -758,7 +771,7 @@ python -m venv .venv && .venv\Scripts\Activate.ps1     # Unix: source .venv/bin/
 pip install -e ".[dev,text]"
 
 ruff check .    # lint
-pytest          # 136 tests; CUDA tests run automatically when a GPU is present
+pytest          # 150 tests; CUDA tests run automatically when a GPU is present
 ```
 
 Runnable examples live in [examples/](examples):
