@@ -3,6 +3,53 @@
 All notable changes to Kinema are recorded here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.19.0 — 2026-08-25
+
+Latent diffusion and distribution-level evaluation. Both are new modules; nothing in the existing
+pixel-space path changed.
+
+### Added
+- **Latent diffusion.** `kinema.latent.LatentDiffusion` wraps a `VideoDiffusion` and an
+  autoencoder and runs the whole process in a compressed space. A 4× spatial compression makes
+  each reverse step roughly 16× cheaper, which is what puts higher resolutions within reach of a
+  single GPU.
+
+  ```python
+  model = LatentDiffusion(inner, autoencoder, image_size = 64)
+  Trainer(model, './data').train()          # Trainer needs no changes
+  ```
+
+  It reports `image_size`, `channels` and `num_frames` in **pixels**, so the dataset still loads
+  full-resolution clips and the trainer, sampling, checkpointing, resuming and `kinema eval` all
+  work unmodified. The autoencoder is frozen by default — training both at once moves the target
+  the diffusion model is chasing.
+
+- **`kinema.autoencoder.FrameAutoencoder`**, a per-frame convolutional compressor with
+  configurable depth and latent width. It compresses space only; temporal structure is left to
+  the U-Net, which has attention across time and the autoencoder does not.
+
+- **Fréchet distance**, the quantity behind FID and FVD: `frechet_distance()`,
+  `frechet_video_distance()`, `video_features()` and `r3d_extractor()` in `kinema.evaluate`.
+
+  Canonical FVD uses I3D, whose weights are not distributed through pip, so the default extractor
+  is torchvision's Kinetics-pretrained R(2+1)D. Scores are comparable to each other but **not to
+  published FVD numbers**. The Fréchet computation is exact and needs no SciPy — the matrix square
+  root goes through an eigendecomposition of a symmetric PSD product rather than `sqrtm`.
+
+- `fit_latent_scale()`, for measuring the latent standard deviation diffusion expects to be near 1.
+
+### Changed
+- `deterministic_loss()` now seeds inside `torch.random.fork_rng()` and lets the model draw its own
+  noise, rather than building the noise itself. A latent model diffuses at the latent resolution,
+  so externally-made noise was the wrong shape — and the fork keeps the caller's global RNG
+  untouched, which the old version also guaranteed.
+
+### Verified
+ruff clean, 235 tests passing on CPU and CUDA. The Fréchet implementation is checked against known
+values: identical sets score exactly zero, a uniform shift of *d* costs *d²* per dimension, and the
+result is symmetric and never negative. Latent diffusion is trained end to end through the ordinary
+`Trainer`, producing pixel-resolution samples, a checkpoint and a successful resume.
+
 ## 0.18.0 — 2026-08-25
 
 ### Added

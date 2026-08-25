@@ -14,6 +14,7 @@ model, after Ho et al., *Video Diffusion Models* (https://arxiv.org/abs/2204.034
     videos = diffusion.sample(batch_size = 4)
 """
 
+from kinema.autoencoder import FrameAutoencoder
 from kinema.data import (
     Dataset,
     caption_for,
@@ -25,6 +26,7 @@ from kinema.data import (
     video_to_tensor,
 )
 from kinema.diffusion import GaussianDiffusion, VideoDiffusion
+from kinema.latent import LatentDiffusion
 from kinema.trainer import Trainer
 from kinema.unet import Unet3D
 from kinema.version import __version__
@@ -33,6 +35,8 @@ __all__ = [
     'Unet3D',
     'VideoDiffusion',
     'GaussianDiffusion',
+    'LatentDiffusion',
+    'FrameAutoencoder',
     'Trainer',
     'Dataset',
     'read_clip',

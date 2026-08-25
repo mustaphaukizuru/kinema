@@ -13,7 +13,7 @@
 [![CI](https://github.com/mustaphaukizuru/kinema/actions/workflows/ci.yml/badge.svg)](https://github.com/mustaphaukizuru/kinema/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.9%20%E2%80%93%203.13-3776ab)](https://www.python.org)
 [![PyTorch](https://img.shields.io/badge/pytorch-%E2%89%A5%202.0-ee4c2c)](https://pytorch.org)
-[![Tests](https://img.shields.io/badge/tests-203%20passing-2ea44f)](tests)
+[![Tests](https://img.shields.io/badge/tests-235%20passing-2ea44f)](tests)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
 
 [Install](#install) · [Running it](#running-it) · [Quickstart](#quickstart) · [CLI](#command-line) · [Sampling](#faster-sampling-with-ddim) · [Training](#training) · [API](#api-reference) · [Benchmarks](#benchmarks) · [FAQ](#faq)
@@ -54,7 +54,7 @@ you can depend on.
 | **Running it** | Write your own training script | `kinema train -c config.yaml` |
 | **Install weight** | Transformers pulled in whether you need it or not | Optional `[text]` extra |
 | **Structure** | One 1,000-line file | Eight focused modules |
-| **Verification** | None | 203 tests, CI on Python 3.9 – 3.13 |
+| **Verification** | None | 235 tests, CI on Python 3.9 – 3.13 |
 | **Warnings** | Accumulate quietly until something breaks | Deprecations fail the build |
 
 <div align="center">
@@ -195,6 +195,23 @@ rises, which is exactly what happens in practice.
 `kinema eval` fixes the clips, the timesteps and the noise, so the number means the same thing for
 every checkpoint. Same seed, same score, on any machine. It needs no reference model and no extra
 download.
+
+### Compare distributions
+
+Beyond per-checkpoint loss, `kinema.evaluate` can measure how far generated clips sit from real
+ones — the quantity behind FID and FVD:
+
+```python
+from kinema.evaluate import frechet_video_distance
+
+score = frechet_video_distance(real_clips, generated_clips)   # lower is closer
+```
+
+Canonical FVD uses I3D, whose weights are not distributed through pip. The default extractor is
+torchvision's Kinetics-pretrained R(2+1)D, so **scores are comparable to each other but not to
+published FVD numbers** — use it to rank your own runs. Pass your own `extractor` for anything
+else. The Fréchet computation itself is exact and dependency-free: no SciPy, no complex
+intermediate values.
 
 ### Reproduce a result
 
@@ -638,6 +655,48 @@ blend = diffusion.interpolate(video_a, video_b, cond = text, cond_scale = 2.)
 
 ---
 
+## Latent diffusion
+
+Every reverse step runs the U-Net at full resolution, which is what makes high resolutions
+expensive. Latent diffusion compresses each frame first, denoises in that smaller space, and
+decodes at the end — a 4× spatial compression makes each step roughly **16× cheaper**.
+
+```python
+from kinema import FrameAutoencoder, LatentDiffusion, Unet3D, VideoDiffusion, Trainer
+
+autoencoder = FrameAutoencoder(latent_channels = 4, levels = 2)   # 64px -> 16px
+# train the autoencoder first, on reconstruction alone:
+#   loss = autoencoder.reconstruction_loss(videos)
+
+unet  = Unet3D(dim = 64, dim_mults = (1, 2, 4), channels = 4, out_dim = 4)
+inner = VideoDiffusion(unet, image_size = 16, num_frames = 10, channels = 4)
+
+model = LatentDiffusion(inner, autoencoder, image_size = 64)
+Trainer(model, './data').train()          # Trainer needs no changes
+```
+
+`LatentDiffusion` reports `image_size`, `channels` and `num_frames` in **pixels**, so the dataset
+still loads full-resolution clips and everything downstream — the trainer, sampling, checkpoints,
+`kinema eval` — works unchanged. Compression happens inside.
+
+Two things worth knowing:
+
+- **Train the autoencoder first, then freeze it.** It is frozen by default. Training both at once
+  moves the target the diffusion model is chasing.
+- **Measure the latent scale.** Diffusion assumes roughly unit-variance inputs and latents rarely
+  oblige; a mismatch costs quality quietly rather than raising anything.
+
+  ```python
+  from kinema.latent import fit_latent_scale
+  model = LatentDiffusion(inner, autoencoder, image_size = 64,
+                          latent_scale = fit_latent_scale(autoencoder, batch))
+  ```
+
+The autoencoder compresses space only — temporal structure is the U-Net's job, since it has
+attention across time and the autoencoder does not.
+
+---
+
 ## Architecture options
 
 Two additions to the paper's design, both off by default.
@@ -776,7 +835,9 @@ Yields tensors, or `(video, caption)` pairs when captions are in play. `has_capt
 | `kinema.trainer` | `Trainer` and EMA |
 | `kinema.data` | `Dataset`, GIF/MP4/frame-folder read and write |
 | `kinema.cli` | The `kinema` command and YAML config handling |
-| `kinema.evaluate` | Deterministic scoring, for comparing checkpoints |
+| `kinema.evaluate` | Deterministic scoring and Fréchet distance |
+| `kinema.autoencoder` | `FrameAutoencoder`, the spatial compressor for latent diffusion |
+| `kinema.latent` | `LatentDiffusion`, diffusion in a compressed space |
 | `kinema.text` | BERT tokenisation and embedding |
 | `kinema.utils` | Shared helpers |
 
@@ -852,7 +913,7 @@ python -m venv .venv && .venv\Scripts\Activate.ps1     # Unix: source .venv/bin/
 pip install -e ".[dev,text]"
 
 ruff check .    # lint
-pytest          # 203 tests; CUDA tests run automatically when a GPU is present
+pytest          # 235 tests; CUDA tests run automatically when a GPU is present
 ```
 
 Runnable examples live in [examples/](examples):
